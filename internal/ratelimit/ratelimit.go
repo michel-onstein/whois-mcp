@@ -280,11 +280,24 @@ func capPause(d time.Duration) time.Duration {
 	return d
 }
 
-// HostKey normalizes an upstream identifier to the host that enforces the
-// quota: lowercase, no port, no scheme, no path.
+// defaultPorts are the ports that carry no information: an upstream reached on
+// one of these is the same service as the same host named without a port.
+var defaultPorts = map[string]bool{"43": true, "443": true, "80": true}
+
+// HostKey normalizes an upstream identifier to the thing that enforces the
+// quota: lowercase, no scheme, no path, and no *default* port.
 //
 // Several TLDs share one WHOIS or RDAP host, and keying by anything narrower
-// would let three separately-polite streams add up to one impolite one.
+// would let three separately-polite streams add up to one impolite one. That is
+// why the default port is dropped — the WHOIS transport always appends :43 while
+// IANA discovery returns a bare hostname, and treating those as two upstreams
+// would split one registry's budget in half.
+//
+// A non-default port is kept, because then it is load-bearing: two services on
+// one host reached on different ports are two services, and merging them would
+// make one of them responsible for the other's failures. In production this
+// almost never fires; it matters for anything reached on an unusual port, and it
+// is what keeps separate fakes separate under test.
 func HostKey(hostOrURL string) string {
 	s := strings.TrimSpace(strings.ToLower(hostOrURL))
 	if s == "" {
@@ -296,15 +309,25 @@ func HostKey(hostOrURL string) string {
 	if i := strings.IndexAny(s, "/?#"); i >= 0 {
 		s = s[:i]
 	}
-	// Strip a port, leaving a bracketed IPv6 literal intact.
+
+	host, port := s, ""
 	if strings.HasPrefix(s, "[") {
+		// Bracketed IPv6 literal, optionally with a port after the bracket.
 		if i := strings.Index(s, "]"); i >= 0 {
-			s = s[:i+1]
+			host = s[:i+1]
+			if len(s) > i+1 && s[i+1] == ':' {
+				port = s[i+2:]
+			}
 		}
-	} else if i := strings.LastIndex(s, ":"); i > 0 {
-		s = s[:i]
+	} else if i := strings.LastIndex(s, ":"); i > 0 && !strings.Contains(s[i+1:], ":") {
+		host, port = s[:i], s[i+1:]
 	}
-	return strings.TrimSuffix(s, ".")
+	host = strings.TrimSuffix(host, ".")
+
+	if port == "" || defaultPorts[port] {
+		return host
+	}
+	return host + ":" + port
 }
 
 func sleepCtx(ctx context.Context, d time.Duration) error {

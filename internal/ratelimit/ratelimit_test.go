@@ -12,15 +12,24 @@ import (
 
 func TestHostKey(t *testing.T) {
 	cases := map[string]string{
-		"whois.nic.uk":                       "whois.nic.uk",
-		"WHOIS.NIC.UK":                       "whois.nic.uk",
-		"whois.nic.uk:43":                    "whois.nic.uk",
-		"whois.nic.uk.":                      "whois.nic.uk",
-		"https://rdap.verisign.com/com/v1/":  "rdap.verisign.com",
-		"https://rdap.example.com:8443/path": "rdap.example.com",
-		"  https://Rdap.Example.com/x  ":     "rdap.example.com",
-		"[2001:db8::1]:43":                   "[2001:db8::1]",
-		"":                                   "unknown",
+		"whois.nic.uk": "whois.nic.uk",
+		"WHOIS.NIC.UK": "whois.nic.uk",
+		// The default port carries no information: the transport appends :43
+		// while IANA discovery returns a bare host, and splitting those would
+		// halve one registry's budget.
+		"whois.nic.uk:43":                   "whois.nic.uk",
+		"whois.nic.uk.":                     "whois.nic.uk",
+		"https://rdap.verisign.com/com/v1/": "rdap.verisign.com",
+		"https://rdap.example.com:443/x":    "rdap.example.com",
+		"  https://Rdap.Example.com/x  ":    "rdap.example.com",
+		"[2001:db8::1]:43":                  "[2001:db8::1]",
+		"[2001:db8::1]":                     "[2001:db8::1]",
+		"":                                  "unknown",
+		// A non-default port is load-bearing: two services on one host reached
+		// on different ports are two services.
+		"https://rdap.example.com:8443/path": "rdap.example.com:8443",
+		"127.0.0.1:54321":                    "127.0.0.1:54321",
+		"[::1]:9999":                         "[::1]:9999",
 	}
 	for in, want := range cases {
 		if got := HostKey(in); got != want {
@@ -37,6 +46,18 @@ func TestHostKeyGroupsSharedRegistries(t *testing.T) {
 	net := HostKey("https://rdap.verisign.com/net/v1/domain/example.net")
 	if com != net {
 		t.Errorf("%q and %q are different keys; they are the same quota", com, net)
+	}
+}
+
+// TestHostKeySeparatesDistinctPorts is the other half of the rule. Two upstreams
+// on one host but different ports must not share a breaker, or one of them
+// becomes responsible for the other's failures — which is exactly what happened
+// to the resolver's resilience test before this distinction existed.
+func TestHostKeySeparatesDistinctPorts(t *testing.T) {
+	a := HostKey("127.0.0.1:50001")
+	b := HostKey("127.0.0.1:50002")
+	if a == b {
+		t.Errorf("HostKey collapsed two ports to %q; distinct services would share a breaker", a)
 	}
 }
 

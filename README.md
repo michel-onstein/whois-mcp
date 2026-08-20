@@ -7,7 +7,7 @@ over RDAP, with a WHOIS fallback for the ccTLDs that publish no RDAP service.
 - Design: [`docs/MCP_DESIGN.md`](docs/MCP_DESIGN.md)
 - Build order: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)
 
-## Status: M2
+## Status: M3
 
 **Any TLD resolves.** RDAP covers the gTLDs (~1,200 TLDs); the port-43 WHOIS
 fallback covers the ccTLDs that publish no RDAP service, and also rescues a
@@ -59,7 +59,48 @@ unauthenticated instance reachable from a network is an open proxy that queries
 registries from your egress IP, and the resulting block presents as a total
 outage for the affected TLD.
 
-Not yet implemented: Docker and rate limiting (M3), Helm (M4).
+Not yet implemented: Helm (M4).
+
+## Running in a container
+
+```bash
+export WHOIS_MCP_ENROLLMENT_TOKEN=$(openssl rand -base64 32)
+export WHOIS_MCP_SIGNING_KEY=$(openssl rand -base64 32)
+cd deploy/docker && docker compose up
+```
+
+That brings up two replicas behind one Redis, which is the configuration worth
+testing: it is the only way to see whether a session enrolled against one replica
+works against the other. `scripts/e2e.sh` walks that flow, and CI runs it.
+
+The image is `distroless/static:nonroot` — no shell, no package manager. It can
+afford to be, because the IANA bootstrap snapshot and the enrollment UI are
+compiled in with `go:embed`, so the binary has no runtime file dependencies.
+
+## Being a well-behaved client
+
+There is no agreement with any registry. This server queries them as an anonymous
+client with no negotiated quota and no contractual protection, so it is
+deliberately conservative:
+
+- Per-upstream-host token buckets, keyed by host because several TLDs share one
+  registry endpoint.
+- `Retry-After` honoured exactly, in both permitted forms.
+- Exponential backoff with full jitter, so several replicas that saw the same
+  failure do not retry in unison.
+- A circuit breaker per host, so one dead registry fails fast instead of holding
+  requests open and starving every other TLD.
+- Concurrent identical lookups collapsed into one upstream call.
+
+Cache hit rate is the main lever keeping query volume off registry radar, so it
+is a primary metric rather than a nicety. `/metrics` exposes it alongside lookup
+duration, upstream status counts, parse confidence, rate-limiting, auth failures,
+active sessions and breaker state. No metric or trace ever carries the domain
+being looked up — a query stream is itself sensitive.
+
+Set `WHOIS_MCP_OTEL_ENDPOINT` for OTLP tracing. W3C trace-context is propagated
+from the MCP `_meta` fields either way, so an agent's trace links through to the
+registry call that was slow.
 
 ## Run
 
