@@ -184,7 +184,9 @@ which is a different fact from "there is no registrant".
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `WHOIS_MCP_LISTEN` | `127.0.0.1:8080` | Listen address; must be loopback until M2 |
+| `WHOIS_MCP_LISTEN` | `127.0.0.1:8080` | Listen address as `host:port`; also `--listen` |
+| `WHOIS_MCP_ADDRESS` | `127.0.0.1` | Address only; also `--address` |
+| `WHOIS_MCP_PORT` | `8080` | Port only; also `--port` |
 | `WHOIS_MCP_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error` |
 | `WHOIS_MCP_RDAP_BOOTSTRAP_URL` | IANA | Override for a mirror |
 

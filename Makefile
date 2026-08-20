@@ -11,9 +11,14 @@ build:
 	@mkdir -p bin
 	CGO_ENABLED=0 go build -trimpath -ldflags="$(LDFLAGS)" -o $(BIN) ./cmd/whois-mcp
 
-## run: start the server on loopback. It refuses any other bind until auth lands (M2).
+## ADDRESS/PORT override the listener: `make run PORT=9000`.
+ADDRESS ?= 127.0.0.1
+PORT ?= 8080
+
+## run: start the server on loopback. Binding anything else needs an enrollment
+## token; the startup guard refuses otherwise.
 run:
-	WHOIS_MCP_LISTEN=127.0.0.1:8080 go run ./cmd/whois-mcp
+	go run ./cmd/whois-mcp --address $(ADDRESS) --port $(PORT)
 
 test:
 	go test $(PKG)

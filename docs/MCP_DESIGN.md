@@ -674,9 +674,21 @@ call immediately.
 
 Environment variables (12-factor); a config file may override for local dev.
 
+The listener is the one setting with a command-line form as well, because it is
+the one routinely changed while running the binary by hand. Precedence, highest
+last: default, `WHOIS_MCP_LISTEN`, `WHOIS_MCP_ADDRESS`/`WHOIS_MCP_PORT`,
+`--listen`, `--address`/`--port`. Flags beat environment, and within a tier the
+specific part beats the combined form — so `--listen 0.0.0.0:8080 --port 9000`
+serves on `0.0.0.0:9000`.
+
+Whichever path sets it, the resolved address goes through the §7 security gate:
+binding anything but loopback requires an enrollment token.
+
 | Variable | Default | Purpose |
 |---|---|---|
-| `WHOIS_MCP_LISTEN` | `:8080` | Bind address |
+| `WHOIS_MCP_LISTEN` | `127.0.0.1:8080` | Bind address as `host:port`; also `--listen` |
+| `WHOIS_MCP_ADDRESS` | `127.0.0.1` | Bind address only; also `--address`. Overrides the address in `WHOIS_MCP_LISTEN` |
+| `WHOIS_MCP_PORT` | `8080` | Port only; also `--port`. Overrides the port in `WHOIS_MCP_LISTEN` |
 | `WHOIS_MCP_PUBLIC_URL` | — | Canonical URI; the OAuth `aud` and `resource` value |
 | `WHOIS_MCP_ENROLLMENT_TOKEN` | — | The fixed token (Secret; hashed at startup) |
 | `WHOIS_MCP_SIGNING_KEY` | — | Ed25519 private key (PEM); generated in dev if unset |

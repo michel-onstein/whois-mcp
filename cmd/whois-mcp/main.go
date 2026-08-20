@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
 	"log/slog"
 	"net"
@@ -27,7 +28,23 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
+	fs := flag.NewFlagSet("whois-mcp", flag.ContinueOnError)
+	lf := registerListenFlags(fs)
+	fs.Usage = func() { listenUsage(os.Stderr, fs) }
+
+	if err := fs.Parse(os.Args[1:]); err != nil {
+		// flag already printed the reason and, for -h, the usage.
+		if errors.Is(err, flag.ErrHelp) {
+			return
+		}
+		os.Exit(2)
+	}
+	if fs.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "fatal: unexpected argument %q; this server takes flags only\n", fs.Arg(0))
+		os.Exit(2)
+	}
+
+	if err := run(lf); err != nil {
 		fmt.Fprintf(os.Stderr, "fatal: %v\n", err)
 		os.Exit(1)
 	}
@@ -40,13 +57,22 @@ type config struct {
 	otelEndpoint string
 }
 
-func loadConfig() config {
+// loadConfig resolves configuration from flags and the environment.
+//
+// The listen address is the only setting with a command-line form, because it is
+// the only one someone routinely changes while running the binary by hand.
+// Everything else is 12-factor environment (design §10).
+func loadConfig(lf *listenFlags) (config, error) {
+	listen, err := resolveListen(lf, os.Getenv)
+	if err != nil {
+		return config{}, err
+	}
 	return config{
-		listen:       env("WHOIS_MCP_LISTEN", "127.0.0.1:8080"),
+		listen:       listen,
 		logLevel:     env("WHOIS_MCP_LOG_LEVEL", "info"),
 		bootstrapURL: env("WHOIS_MCP_RDAP_BOOTSTRAP_URL", rdapx.BootstrapURL),
 		otelEndpoint: env("WHOIS_MCP_OTEL_ENDPOINT", ""),
-	}
+	}, nil
 }
 
 func env(k, def string) string {
@@ -56,14 +82,21 @@ func env(k, def string) string {
 	return def
 }
 
-func run() error {
-	cfg := loadConfig()
+func run(lf *listenFlags) error {
+	cfg, err := loadConfig(lf)
+	if err != nil {
+		return err
+	}
 	log := obs.NewLogger(cfg.logLevel)
 
 	// Security gate (docs/IMPLEMENTATION_PLAN.md §7), now scope-aware: an
 	// authenticated instance may bind off-host, an unauthenticated one may not.
 	// Refuse rather than warn — the failure mode is an IP block that reads as a
 	// total outage for a TLD.
+	//
+	// This runs on the *resolved* listen address, so --address and --port are
+	// governed by it exactly as WHOIS_MCP_LISTEN always was. A new way to choose
+	// an address must not become a way around the gate.
 	acfg := loadAuthConfig()
 	if err := checkExposure(cfg, acfg); err != nil {
 		return err
