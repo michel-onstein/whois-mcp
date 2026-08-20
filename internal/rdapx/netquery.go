@@ -18,6 +18,7 @@ import (
 // ResourceKind is what an ip_lookup input turned out to be.
 type ResourceKind string
 
+// The three resource kinds an ip_lookup input can resolve to.
 const (
 	KindIP     ResourceKind = "ip"
 	KindPrefix ResourceKind = "prefix"

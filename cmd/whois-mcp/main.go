@@ -135,7 +135,7 @@ func run() error {
 
 	// Keep the breaker and session gauges current. Cheap, and it is what turns
 	// "something is wrong" into "this registry is down" on a dashboard.
-	go publishGauges(ctx, metrics, guard, backends, log)
+	go publishGauges(ctx, metrics, guard, backends)
 
 	stack, err := buildAuth(cfg, acfg, store, backends.sessions, log)
 	if err != nil {
@@ -173,7 +173,7 @@ func run() error {
 		promhttp.HandlerOpts{ErrorHandling: promhttp.ContinueOnError}))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, "ok")
+		_, _ = fmt.Fprintln(w, "ok")
 	})
 	// /readyz is gated on everything a replica needs in order to answer, so a
 	// replica that cannot is taken out of rotation rather than left to fail
@@ -201,7 +201,7 @@ func run() error {
 			}
 		}
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, "ready")
+		_, _ = fmt.Fprintln(w, "ready")
 	})
 
 	srv := &http.Server{
@@ -294,7 +294,7 @@ func nowPlusHour() time.Time {
 // Counters and histograms are updated where the work happens; these two are
 // state rather than events, so they need a poller. The interval is short enough
 // that a dashboard shows a registry going down within a scrape or two.
-func publishGauges(ctx context.Context, m *obs.Metrics, guard *ratelimit.Guard, backends *stores, log *slog.Logger) {
+func publishGauges(ctx context.Context, m *obs.Metrics, guard *ratelimit.Guard, backends *stores) {
 	t := time.NewTicker(15 * time.Second)
 	defer t.Stop()
 

@@ -3,7 +3,7 @@ PKG      := ./...
 VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS  := -s -w -X github.com/qjam/whois-mcp/internal/mcpsrv.Version=$(VERSION)
 
-.PHONY: all build run test race vet fmt fmtcheck lint tidy clean check
+.PHONY: all build run test race vet fmt fmtcheck lint tidy clean check check-all
 
 all: check build
 
@@ -37,8 +37,15 @@ lint:
 tidy:
 	go mod tidy
 
-## check: everything CI runs, minus the linter binary.
+## check: the fast gate — everything CI runs except the linter binary.
 check: fmtcheck vet race
+
+## check-all: check plus the linter, i.e. everything CI actually gates on.
+##
+## Split from `check` because golangci-lint is a separate install; use this
+## before pushing. The lint config is version "2", so it needs golangci-lint v2:
+##   go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+check-all: check lint
 
 clean:
 	rm -rf bin

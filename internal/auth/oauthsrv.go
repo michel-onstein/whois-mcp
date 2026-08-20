@@ -203,10 +203,10 @@ type authRequest struct {
 // redirect_uri or client_id must be shown to the user in the browser, because
 // redirecting to an unvalidated URI to report an error is itself the
 // open-redirect bug. Everything else can go back via the redirect.
-func (s *Server) parseAuthRequest(q url.Values) (*authRequest, error, bool) {
+func (s *Server) parseAuthRequest(q url.Values) (*authRequest, bool, error) {
 	redirectURI := q.Get("redirect_uri")
 	if err := ValidateRedirectURI(redirectURI); err != nil {
-		return nil, err, false // must not redirect
+		return nil, false, err // must not redirect
 	}
 
 	req := &authRequest{
@@ -218,21 +218,21 @@ func (s *Server) parseAuthRequest(q url.Values) (*authRequest, error, bool) {
 	}
 
 	if rt := q.Get("response_type"); rt != "code" {
-		return req, fmt.Errorf("unsupported_response_type: %q", rt), true
+		return req, true, fmt.Errorf("unsupported_response_type: %q", rt)
 	}
 	if m := q.Get("code_challenge_method"); m != "S256" {
 		// OAuth 2.1 requires PKCE and removed "plain"; a client that asks for
 		// plain is asking for a challenge equal to its own verifier.
-		return req, fmt.Errorf("invalid_request: code_challenge_method must be S256, got %q", m), true
+		return req, true, fmt.Errorf("invalid_request: code_challenge_method must be S256, got %q", m)
 	}
 	if req.Challenge == "" {
-		return req, errors.New("invalid_request: code_challenge is required"), true
+		return req, true, errors.New("invalid_request: code_challenge is required")
 	}
 	// RFC 8707: if the client names a resource, it must be this one. Minting a
 	// token for a resource the client did not ask for is how a confused-deputy
 	// chain starts.
 	if req.Resource != "" && !sameResource(req.Resource, s.opt.Issuer.Audience()) {
-		return req, fmt.Errorf("invalid_target: this server only issues tokens for %s", s.opt.Issuer.Audience()), true
+		return req, true, fmt.Errorf("invalid_target: this server only issues tokens for %s", s.opt.Issuer.Audience())
 	}
 
 	req.Scopes = NormalizeScopes(strings.Fields(q.Get("scope")))
@@ -241,14 +241,14 @@ func (s *Server) parseAuthRequest(q url.Values) (*authRequest, error, bool) {
 	}
 	for _, sc := range req.Scopes {
 		if !knownScope(sc) {
-			return req, fmt.Errorf("invalid_scope: %q", sc), true
+			return req, true, fmt.Errorf("invalid_scope: %q", sc)
 		}
 	}
-	return req, nil, true
+	return req, true, nil
 }
 
 func (s *Server) authorizeGET(w http.ResponseWriter, r *http.Request) {
-	req, err, canRedirect := s.parseAuthRequest(r.URL.Query())
+	req, canRedirect, err := s.parseAuthRequest(r.URL.Query())
 	if err != nil {
 		s.authorizeError(w, r, req, err, canRedirect)
 		return
@@ -267,7 +267,7 @@ func (s *Server) authorizePOST(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid form submission", http.StatusBadRequest)
 		return
 	}
-	req, err, canRedirect := s.parseAuthRequest(r.Form)
+	req, canRedirect, err := s.parseAuthRequest(r.Form)
 	if err != nil {
 		s.authorizeError(w, r, req, err, canRedirect)
 		return
@@ -317,7 +317,7 @@ func (s *Server) authorizePOST(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	code, err := s.opt.Codes.Issue(&AuthCode{
+	code, err := s.opt.Codes.Issue(&Code{
 		SessionID: sid, Label: label, Scopes: req.Scopes,
 		ClientID: req.ClientID, RedirectURI: req.RedirectURI,
 		Challenge: req.Challenge, Resource: req.Resource,

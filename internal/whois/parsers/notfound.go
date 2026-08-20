@@ -7,6 +7,7 @@ import "strings"
 // The caller maps it onto normalize.Tristate.
 type Availability string
 
+// The three availability answers, mirroring normalize.Tristate.
 const (
 	Registered   Availability = "yes"
 	Unregistered Availability = "no"

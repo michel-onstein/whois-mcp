@@ -89,7 +89,7 @@ func NewIssuer(keys *Keyring, issuerURL, audienceURI string) *Issuer {
 	return &Issuer{keys: keys, issuer: issuerURL, audience: audienceURI, now: time.Now}
 }
 
-// Issuer returns the canonical issuer URL.
+// IssuerURL returns the canonical issuer URL.
 func (i *Issuer) IssuerURL() string { return i.issuer }
 
 // Keyring returns the keys this issuer signs and verifies with.

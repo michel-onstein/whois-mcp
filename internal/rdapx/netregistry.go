@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/big"
 	"net"
 	"net/http"
 	"sort"
@@ -353,20 +352,11 @@ func fetchBootstrap(ctx context.Context, hc *http.Client, url string) ([]byte, e
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s returned %s", url, resp.Status)
 	}
 	// Capped for the same reason every other upstream read is: a bootstrap file
 	// is a few kilobytes, and a server streaming indefinitely must not exhaust us.
 	return io.ReadAll(io.LimitReader(resp.Body, MaxResponseBytes))
-}
-
-// ipToBig is used only by tests asserting prefix specificity; kept here so the
-// arithmetic lives next to the lookup it reasons about.
-func ipToBig(ip net.IP) *big.Int {
-	if v4 := ip.To4(); v4 != nil {
-		return new(big.Int).SetBytes(v4)
-	}
-	return new(big.Int).SetBytes(ip.To16())
 }
