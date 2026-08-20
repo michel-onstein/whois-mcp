@@ -1,0 +1,19 @@
+    Domain name:
+        example.co.uk
+
+    Registrar:
+        Example Registrar Ltd [Tag = EXAMPLE-TAG]
+
+    Relevant dates:
+        Registered on: 12-Mar-1999
+        Expiry date:  12-Mar-2027
+        Last updated:  04-Feb-2026
+
+    Registration status:
+        Registered until expiry date.
+
+    Name servers:
+        ns1.example-dns.test
+        ns2.example-dns.test
+
+    WHOIS lookup made at 12:00:00 19-Aug-2026

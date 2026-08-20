@@ -1,0 +1,7 @@
+Domain name: example.unknown
+Registrar: Some Registrar
+Creation date: 2010-05-04
+Expiry date: 2027-05-04
+Nameserver: ns1.example-dns.test
+Nameserver: ns2.example-dns.test
+Status: active

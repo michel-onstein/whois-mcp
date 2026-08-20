@@ -22,6 +22,7 @@ import (
 	"github.com/qjam/whois-mcp/internal/obs"
 	"github.com/qjam/whois-mcp/internal/rdapx"
 	"github.com/qjam/whois-mcp/internal/resolve"
+	"github.com/qjam/whois-mcp/internal/whois"
 )
 
 func main() {
@@ -73,7 +74,12 @@ func run() error {
 
 	hc := rdapx.NewHTTPClient(rdapx.DefaultTimeout)
 	rc := rdapx.NewClient(reg, hc, rdapx.DefaultUserAgent(mcpsrv.Version))
-	res := resolve.New(rc, cache.NewMemory(), log)
+
+	// One cache backs both protocols and the WHOIS host map; M3 swaps in Redis
+	// behind the same interface.
+	store := cache.NewMemory()
+	wc := whois.NewClient(whois.NewTransport(whois.DefaultTimeout), store, log)
+	res := resolve.New(rc, wc, store, log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

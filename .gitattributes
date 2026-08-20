@@ -1,0 +1,5 @@
+# WHOIS is a CRLF protocol, and the parser's handling of those line endings is
+# part of what the fixtures test. Without this, a checkout on a machine with
+# core.autocrlf=input rewrites them to LF and the CRLF path silently stops being
+# exercised — the test still passes, having stopped testing the thing.
+testdata/whois/*.txt -text

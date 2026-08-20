@@ -1,0 +1,6 @@
+No match for "NOSUCHDOMAIN-QJAM-TEST.COM".
+>>> Last update of whois database: 2026-08-19T12:00:00Z <<<
+
+NOTICE: The expiration date displayed in this record is the date the
+registrar's sponsorship of the domain name registration in the registry is
+currently set to expire.

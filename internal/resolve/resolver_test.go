@@ -43,7 +43,7 @@ func newResolver(t *testing.T, h http.HandlerFunc) (*Resolver, *httptest.Server)
 		t.Fatalf("test registry: %v", err)
 	}
 	hc := rdapx.NewHTTPClientWithOptions(5*time.Second, rdapx.HTTPClientOptions{AllowPrivateAddresses: true})
-	return New(rdapx.NewClient(reg, hc, "test"), cache.NewMemory(), quietLog()), srv
+	return New(rdapx.NewClient(reg, hc, "test"), nil, cache.NewMemory(), quietLog()), srv
 }
 
 func TestLookupRegistered(t *testing.T) {
@@ -168,7 +168,7 @@ func TestLookupContactsSuppressed(t *testing.T) {
 	defer srv.Close()
 	reg, _ := rdapx.NewRegistryForTest(map[string][]string{"uk": {srv.URL + "/"}})
 	hc := rdapx.NewHTTPClientWithOptions(5*time.Second, rdapx.HTTPClientOptions{AllowPrivateAddresses: true})
-	r := New(rdapx.NewClient(reg, hc, "test"), cache.NewMemory(), quietLog())
+	r := New(rdapx.NewClient(reg, hc, "test"), nil, cache.NewMemory(), quietLog())
 
 	with, err := r.Lookup(context.Background(), "nominet.uk", Options{IncludeContacts: true, MaxAge: 0})
 	if err != nil {

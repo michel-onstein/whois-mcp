@@ -33,7 +33,7 @@ func newStack(t *testing.T, h http.HandlerFunc) *httptest.Server {
 		t.Fatalf("registry: %v", err)
 	}
 	hc := rdapx.NewHTTPClientWithOptions(5*time.Second, rdapx.HTTPClientOptions{AllowPrivateAddresses: true})
-	res := resolve.New(rdapx.NewClient(reg, hc, "test"), cache.NewMemory(),
+	res := resolve.New(rdapx.NewClient(reg, hc, "test"), nil, cache.NewMemory(),
 		slog.New(slog.NewTextHandler(io.Discard, nil)))
 
 	srv := New(Options{Resolver: res, Registry: reg})

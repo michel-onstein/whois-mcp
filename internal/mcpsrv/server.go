@@ -64,6 +64,8 @@ func New(opt Options) *mcp.Server {
 			"determine', never as 'available'.",
 	}, lookupHandler(opt))
 
+	registerM1(s, opt)
+
 	return s
 }
 
@@ -103,6 +105,16 @@ func errorResult(domain string, err error) *mcp.CallToolResult {
 		te.Error = "no_service_for_tld"
 	}
 	body, _ := json.Marshal(te)
+	return &mcp.CallToolResult{
+		IsError: true,
+		Content: []mcp.Content{&mcp.TextContent{Text: string(body)}},
+	}
+}
+
+// errorResultCode builds a structured tool error with an explicit code, for
+// the input-validation failures that never reach the resolver.
+func errorResultCode(code, domain, message string) *mcp.CallToolResult {
+	body, _ := json.Marshal(ToolError{Error: code, Message: message, Domain: domain})
 	return &mcp.CallToolResult{
 		IsError: true,
 		Content: []mcp.Content{&mcp.TextContent{Text: string(body)}},

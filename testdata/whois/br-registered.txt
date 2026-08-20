@@ -1,0 +1,17 @@
+% Copyright (c) Nic.br
+%  The use of the data below is only permitted as described in
+%  full by the Use and Privacy Policy at https://registro.br/upp
+
+domain:      example.com.br
+owner:       Example Organizacao
+ownerid:     000.000.000/0001-00
+country:     BR
+owner-c:     EXMPL
+created:     19990315
+changed:     20260210
+expires:     20270315
+status:      published
+nserver:     ns1.example-dns.test
+nsstat:      20260210 AA
+nserver:     ns2.example-dns.test
+nsstat:      20260210 AA

@@ -1,0 +1,2 @@
+%% Rate limit exceeded. Please try again later.
+%% WHOIS LIMIT EXCEEDED - see https://example.test/limit
