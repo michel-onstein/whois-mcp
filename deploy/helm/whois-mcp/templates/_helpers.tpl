@@ -55,6 +55,43 @@ one this chart creates.
 {{- end -}}
 
 {{/*
+publicURL resolves the canonical URI clients reach this server on.
+
+An explicit publicURL wins. Otherwise it is derived from the ingress host,
+because the two naming the same server is the normal case and setting only one
+of them was a mistake this chart used to accept: the ingress routes correctly,
+every token is then rejected on an audience mismatch, and the symptom looks
+nothing like the cause.
+
+https is asserted rather than read from ingress.tls, because the server refuses
+cleartext for anything but loopback — a http audience is one no client could
+have reached in the first place. TLS terminated upstream of the controller is
+the reason ingress.tls is not consulted.
+
+Derivation is skipped when ingress.path is not "/", because the public URI then
+depends on whether the controller rewrites that prefix, which is in an
+annotation this chart cannot read — and when the host is a wildcard, which the
+controller routes but which is not a name any client can be sent to. validate
+says so in both cases rather than guessing.
+*/}}
+{{- define "whois-mcp.publicURL" -}}
+{{- if .Values.publicURL -}}
+{{- .Values.publicURL -}}
+{{- else if and .Values.ingress.enabled .Values.ingress.host (eq .Values.ingress.path "/") (not (contains "*" .Values.ingress.host)) -}}
+{{- printf "https://%s" .Values.ingress.host -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+publicURLHost is the hostname out of a publicURL, with any scheme, port and path
+removed, for comparison against ingress.host.
+*/}}
+{{- define "whois-mcp.publicURLHost" -}}
+{{- $u := include "whois-mcp.publicURL" . | trimPrefix "https://" | trimPrefix "http://" -}}
+{{- $u | splitList "/" | first | splitList ":" | first -}}
+{{- end -}}
+
+{{/*
 validate fails rendering on configurations that would deploy but not work.
 
 Failing at template time is the whole point: every check below produces a
@@ -62,14 +99,40 @@ deployment that comes up healthy and then behaves inexplicably, which is far
 more expensive to diagnose than a refused install.
 */}}
 {{- define "whois-mcp.validate" -}}
-{{- if not .Values.publicURL -}}
-{{- fail "publicURL is required: it is the OAuth issuer and the token audience, and an unset or wrong value rejects every token" -}}
+{{- $publicURL := include "whois-mcp.publicURL" . -}}
+{{- if not $publicURL -}}
+{{- if and .Values.ingress.enabled .Values.ingress.host -}}
+{{- if contains "*" .Values.ingress.host -}}
+{{- fail (printf "publicURL is required here: ingress.host %q is a wildcard, which the controller routes but which is not a name a client can be sent to, so it cannot be derived from. Set publicURL to the concrete hostname clients use" .Values.ingress.host) -}}
 {{- end -}}
-{{- if not (or (hasPrefix "https://" .Values.publicURL) (hasPrefix "http://localhost" .Values.publicURL)) -}}
-{{- fail (printf "publicURL %q must be https: the enrollment token is submitted to it" .Values.publicURL) -}}
+{{- fail (printf "publicURL is required here: it would be derived from ingress.host, but ingress.path is %q rather than \"/\", so the canonical URI depends on whether your controller rewrites that prefix — which this chart cannot see. Set publicURL explicitly to the URI clients use" .Values.ingress.path) -}}
 {{- end -}}
-{{- if hasSuffix "/" .Values.publicURL -}}
-{{- fail (printf "publicURL %q must not end in a slash: the audience is publicURL + /mcp, and a trailing slash produces a double slash that no token will match" .Values.publicURL) -}}
+{{- fail "publicURL is required: it is the OAuth issuer and the token audience, and an unset or wrong value rejects every token. Either set it, or set ingress.host with ingress.enabled and it is derived as https://<host>" -}}
+{{- end -}}
+{{- if not (or (hasPrefix "https://" $publicURL) (hasPrefix "http://localhost" $publicURL)) -}}
+{{- fail (printf "publicURL %q must be https: the enrollment token is submitted to it" $publicURL) -}}
+{{- end -}}
+{{- if hasSuffix "/" $publicURL -}}
+{{- fail (printf "publicURL %q must not end in a slash: the audience is publicURL + /mcp, and a trailing slash produces a double slash that no token will match" $publicURL) -}}
+{{- end -}}
+
+{{/*
+An explicit publicURL naming a host the ingress does not route is the other half
+of the same failure: the controller matches on Host, so one of the two names is
+not the one clients use, and whichever it is the deployment comes up healthy.
+The http://localhost escape hatch is exempt — that is a port-forward, and
+deliberately not the ingress.
+*/}}
+{{- if and .Values.publicURL .Values.ingress.enabled .Values.ingress.host (not (hasPrefix "http://localhost" .Values.publicURL)) -}}
+{{- $host := include "whois-mcp.publicURLHost" . -}}
+{{- $want := .Values.ingress.host -}}
+{{- $ok := eq $host $want -}}
+{{- if hasPrefix "*." $want -}}
+{{- $ok = hasSuffix (trimPrefix "*" $want) $host -}}
+{{- end -}}
+{{- if not $ok -}}
+{{- fail (printf "publicURL %q names host %q but ingress.host is %q: the controller matches on Host, so requests to the publicURL never reach this release. Leave publicURL unset to derive it from ingress.host, or make the two agree" $publicURL $host $want) -}}
+{{- end -}}
 {{- end -}}
 
 {{- if not .Values.secrets.existingSecret -}}

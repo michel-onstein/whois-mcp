@@ -57,10 +57,21 @@ renders "an externally managed secret" \
 renders "autoscaling off" --set autoscaling.enabled=false
 renders "in-flight HPA metric enabled" --set autoscaling.inFlightRequests.enabled=true
 renders "localhost publicURL for a dev cluster" --set publicURL=http://localhost:8080
+renders "publicURL derived from the ingress host" --set publicURL=""
+renders "an explicit publicURL under a wildcard ingress host" \
+  --set 'ingress.host=*.example' --set publicURL=https://whois.example
+renders "an explicit publicURL with a port" --set publicURL=https://whois.example:8443
 
 echo
 echo "== refuses what would deploy but not work =="
-refuses "no publicURL" "publicURL is required" --set publicURL=""
+refuses "no publicURL and no ingress to derive one from" "publicURL is required" \
+  --set publicURL="" --set ingress.enabled=false
+refuses "no publicURL with a non-root ingress path" "ingress.path" \
+  --set publicURL="" --set ingress.path=/whois
+refuses "no publicURL with a wildcard ingress host" "is a wildcard" \
+  --set publicURL="" --set 'ingress.host=*.example'
+refuses "a publicURL naming a host the ingress does not route" "ingress.host is" \
+  --set publicURL=https://elsewhere.example
 refuses "cleartext publicURL" "must be https" --set publicURL=http://whois.example
 refuses "publicURL with a trailing slash" "trailing slash" --set publicURL=https://whois.example/
 refuses "no enrollment token" "secrets.enrollmentToken is required" --set secrets.enrollmentToken=""
@@ -80,6 +91,13 @@ out="$(helm template t "$CHART" "${BASE[@]}")"
 grep -q 'port: 43' <<<"$out" || fail "no egress rule for port 43"
 grep -q 'port: 443' <<<"$out" || fail "no egress rule for port 443"
 pass "NetworkPolicy allows both 43 and 443"
+
+# The derived URL must reach the container, not just render somewhere: it is the
+# token audience, and an empty one rejects every token.
+derived="$(helm template t "$CHART" "${BASE[@]}" --set publicURL="")"
+grep -A1 'name: WHOIS_MCP_PUBLIC_URL' <<<"$derived" | grep -q 'value: "https://whois.example"' \
+  || fail "publicURL was not derived from ingress.host into WHOIS_MCP_PUBLIC_URL"
+pass "publicURL derives from ingress.host"
 
 grep -q 'path: /healthz' <<<"$out" || fail "no liveness probe on /healthz"
 grep -q 'path: /readyz' <<<"$out" || fail "no readiness probe on /readyz"
