@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | In progress — Phase 0, M0 and M1 complete (2026-08-19); M2 next, behind the §7 security gate |
+| **Status** | In progress — Phase 0, M0, M1 and M2 complete (2026-08-19); §7 security gate closed, M3 next |
 | **Date** | 2026-08-19 |
 | **Plans** | [`MCP_DESIGN.md`](MCP_DESIGN.md) (accepted, all open questions resolved) |
 | **Covers** | Milestones M0 → M5 of design §15 |

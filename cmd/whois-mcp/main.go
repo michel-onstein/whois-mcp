@@ -57,12 +57,13 @@ func run() error {
 	cfg := loadConfig()
 	log := obs.NewLogger(cfg.logLevel)
 
-	// Security gate (docs/IMPLEMENTATION_PLAN.md §7). M0 and M1 have no
-	// authentication, so a non-loopback bind would publish an open proxy that
-	// queries registries from our egress IP. Refuse rather than warn: the
-	// failure mode is an IP block that reads as a total outage for a TLD.
-	if err := requireLoopback(cfg.listen); err != nil {
-		return fmt.Errorf("refusing to start: %w", err)
+	// Security gate (docs/IMPLEMENTATION_PLAN.md §7), now scope-aware: an
+	// authenticated instance may bind off-host, an unauthenticated one may not.
+	// Refuse rather than warn — the failure mode is an IP block that reads as a
+	// total outage for a TLD.
+	acfg := loadAuthConfig()
+	if err := checkExposure(cfg, acfg); err != nil {
+		return err
 	}
 
 	reg, err := rdapx.NewRegistry()
@@ -88,7 +89,17 @@ func run() error {
 	// tolerated: the embedded snapshot keeps the server useful.
 	go refreshBootstrap(ctx, reg, hc, cfg.bootstrapURL, log)
 
-	server := mcpsrv.New(mcpsrv.Options{Resolver: res, Registry: reg, Log: log})
+	stack, err := buildAuth(cfg, acfg, store, log)
+	if err != nil {
+		return err
+	}
+
+	mopt := mcpsrv.Options{Resolver: res, Registry: reg, Log: log}
+	if stack != nil {
+		mopt.Auth = mcpsrv.AuthOptions{Sessions: stack.sessions, Denylist: stack.denylist}
+		mopt.EnforceScopes = true
+	}
+	server := mcpsrv.New(mopt)
 	handler := mcp.NewStreamableHTTPHandler(
 		func(*http.Request) *mcp.Server { return server },
 		&mcp.StreamableHTTPOptions{
@@ -100,7 +111,16 @@ func run() error {
 	)
 
 	mux := http.NewServeMux()
-	mux.Handle("/mcp", handler)
+	if stack != nil {
+		// Authenticated: the bearer middleware runs first so the scope gate can
+		// read the token's scopes out of the request context, and the OAuth
+		// endpoints are registered unprotected because they are how a client
+		// obtains a token in the first place.
+		mux.Handle("/mcp", stack.protect(handler))
+		stack.server.Routes(mux)
+	} else {
+		mux.Handle("/mcp", handler)
+	}
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
@@ -123,8 +143,15 @@ func run() error {
 
 	errCh := make(chan error, 1)
 	go func() {
+		authState := "NONE - loopback only"
+		if stack != nil {
+			authState = "OAuth 2.1, issuer " + stack.issuer.IssuerURL()
+			if stack.staticTok != "" {
+				authState += " (WHOIS_MCP_DEV_STATIC_BEARER enabled)"
+			}
+		}
 		log.Info("listening", "addr", cfg.listen, "mcp", "POST http://"+cfg.listen+"/mcp",
-			"auth", "NONE - M0/M1 loopback only")
+			"auth", authState)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
@@ -183,4 +210,11 @@ func refreshBootstrap(ctx context.Context, reg *rdapx.Registry, hc *http.Client,
 			do()
 		}
 	}
+}
+
+// nowPlusHour is the expiry stamped on a development static-bearer session. The
+// SDK middleware rejects a TokenInfo with no expiration, and an hour is long
+// enough for a debugging session without being indefinite.
+func nowPlusHour() time.Time {
+	return time.Now().Add(time.Hour)
 }

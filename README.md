@@ -7,7 +7,7 @@ over RDAP, with a WHOIS fallback for the ccTLDs that publish no RDAP service.
 - Design: [`docs/MCP_DESIGN.md`](docs/MCP_DESIGN.md)
 - Build order: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)
 
-## Status: M1
+## Status: M2
 
 **Any TLD resolves.** RDAP covers the gTLDs (~1,200 TLDs); the port-43 WHOIS
 fallback covers the ccTLDs that publish no RDAP service, and also rescues a
@@ -25,13 +25,41 @@ free text that was interpreted. The raw response is always retained.
 page, an empty reply or a contradictory record all yield `unknown`, never `no`:
 telling you a taken domain is free is this server's worst failure mode.
 
-**There is no authentication yet.** It arrives at M2. Until then the server
-refuses to bind to anything but loopback and will not start otherwise — an
+## Authentication
+
+OAuth 2.1. The fixed enrollment token your operator holds is an *enrollment
+secret*, not a request credential: it is entered once in a browser form and
+exchanged for tokens scoped to a single named session.
+
+- Access tokens are EdDSA JWTs with a 10-minute TTL, verified locally by any
+  replica with no store lookup — which is what keeps replicas interchangeable.
+- Refresh tokens are opaque, rotating, one-time-use, on a sliding 30-day window.
+  Replaying a spent one is treated as theft: the whole family is revoked.
+- Scopes: `whois:read` for lookups, `whois:raw` for the unredacted raw responses,
+  `whois:admin` for `session_list` / `session_revoke`. Only `whois:read` is
+  advertised; the others come through step-up, so a read-only client never holds
+  a raw-capable credential.
+- Sessions are individually labelled and individually revocable. Revocation is
+  immediate for refresh tokens and takes effect within 10 minutes for access
+  tokens.
+
+```bash
+export WHOIS_MCP_ENROLLMENT_TOKEN=$(openssl rand -base64 32)
+export WHOIS_MCP_SIGNING_KEY=...        # Ed25519 seed; generated if unset
+export WHOIS_MCP_PUBLIC_URL=https://whois.example   # required off loopback
+```
+
+`WHOIS_MCP_PUBLIC_URL` is the token audience, so a wrong value rejects every
+token. `WHOIS_MCP_DEV_STATIC_BEARER=true` lets `curl` present the enrollment
+token directly, and refuses to start off loopback because it turns that secret
+into a request credential.
+
+**Without an enrollment token the server still refuses to bind off-host.** An
 unauthenticated instance reachable from a network is an open proxy that queries
 registries from your egress IP, and the resulting block presents as a total
 outage for the affected TLD.
 
-Not yet implemented: auth (M2), Docker and rate limiting (M3), Helm (M4).
+Not yet implemented: Docker and rate limiting (M3), Helm (M4).
 
 ## Run
 

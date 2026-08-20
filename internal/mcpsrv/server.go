@@ -45,6 +45,14 @@ type Options struct {
 	Resolver *resolve.Resolver
 	Registry *rdapx.Registry
 	Log      *slog.Logger
+	// Auth carries the M2 session dependencies. Zero value means no
+	// authentication is configured, in which case the admin tools are not
+	// registered at all — better than registering tools that cannot work.
+	Auth AuthOptions
+	// EnforceScopes turns on the in-handler scope checks. It is off for an
+	// unauthenticated build, where there is no token to carry a scope and
+	// enforcing would refuse every call.
+	EnforceScopes bool
 }
 
 // New builds an MCP server with the tool surface registered.
@@ -65,6 +73,7 @@ func New(opt Options) *mcp.Server {
 	}, lookupHandler(opt))
 
 	registerM1(s, opt)
+	registerM2(s, opt)
 
 	return s
 }
