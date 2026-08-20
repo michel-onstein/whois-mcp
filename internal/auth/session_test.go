@@ -28,13 +28,23 @@ func newSession(t *testing.T, now time.Time) (*Session, string) {
 	}, rt
 }
 
+// createWithRefresh creates a session and issues its first refresh token, which
+// is what the code-exchange path does in one go.
+func createWithRefresh(t *testing.T, st *MemoryStore, s *Session, token string) error {
+	t.Helper()
+	if err := st.Create(context.Background(), s); err != nil {
+		return err
+	}
+	return st.IssueRefresh(context.Background(), s.ID, token, s.CreatedAt)
+}
+
 func TestCreateAndGet(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC()
 	st := NewMemoryStore()
 	s, rt := newSession(t, now)
 
-	if err := st.Create(ctx, s, rt); err != nil {
+	if err := createWithRefresh(t, st, s, rt); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	got, err := st.Get(ctx, s.ID)
@@ -66,7 +76,7 @@ func TestRotateIssuesSuccessorAndSlidesWindow(t *testing.T) {
 	start := time.Now().UTC()
 	st := NewMemoryStore()
 	s, rt1 := newSession(t, start)
-	if err := st.Create(ctx, s, rt1); err != nil {
+	if err := createWithRefresh(t, st, s, rt1); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -105,7 +115,7 @@ func TestRotateReuseRevokesWholeFamily(t *testing.T) {
 	now := time.Now().UTC()
 	st := NewMemoryStore()
 	s, rt1 := newSession(t, now)
-	if err := st.Create(ctx, s, rt1); err != nil {
+	if err := createWithRefresh(t, st, s, rt1); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -144,7 +154,7 @@ func TestRotateIsAtomicUnderConcurrency(t *testing.T) {
 	now := time.Now().UTC()
 	st := NewMemoryStore()
 	s, rt1 := newSession(t, now)
-	if err := st.Create(ctx, s, rt1); err != nil {
+	if err := createWithRefresh(t, st, s, rt1); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -181,7 +191,7 @@ func TestRotateRejectsUnknownAndExpired(t *testing.T) {
 	now := time.Now().UTC()
 	st := NewMemoryStore()
 	s, rt1 := newSession(t, now)
-	if err := st.Create(ctx, s, rt1); err != nil {
+	if err := createWithRefresh(t, st, s, rt1); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 
@@ -201,7 +211,7 @@ func TestRevokeKillsFamily(t *testing.T) {
 	now := time.Now().UTC()
 	st := NewMemoryStore()
 	s, rt1 := newSession(t, now)
-	if err := st.Create(ctx, s, rt1); err != nil {
+	if err := createWithRefresh(t, st, s, rt1); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	if err := st.Revoke(ctx, s.ID, now); err != nil {
@@ -230,7 +240,7 @@ func TestListNewestFirst(t *testing.T) {
 	st := NewMemoryStore()
 	for i := range 3 {
 		s, rt := newSession(t, base.Add(time.Duration(i)*time.Hour))
-		if err := st.Create(ctx, s, rt); err != nil {
+		if err := createWithRefresh(t, st, s, rt); err != nil {
 			t.Fatalf("Create: %v", err)
 		}
 	}
@@ -253,7 +263,7 @@ func TestTouchUpdatesLastSeenWithoutRotating(t *testing.T) {
 	now := time.Now().UTC()
 	st := NewMemoryStore()
 	s, rt := newSession(t, now)
-	if err := st.Create(ctx, s, rt); err != nil {
+	if err := createWithRefresh(t, st, s, rt); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
 	later := now.Add(time.Hour)
@@ -276,15 +286,24 @@ func TestTouchUpdatesLastSeenWithoutRotating(t *testing.T) {
 func TestCreateValidates(t *testing.T) {
 	ctx := context.Background()
 	st := NewMemoryStore()
-	if err := st.Create(ctx, nil, "tok"); err == nil {
+	if err := st.Create(ctx, nil); err == nil {
 		t.Error("Create(nil) succeeded")
 	}
-	if err := st.Create(ctx, &Session{}, "tok"); err == nil {
+	if err := st.Create(ctx, &Session{}); err == nil {
 		t.Error("Create with no id succeeded")
 	}
 	s, _ := newSession(t, time.Now())
-	if err := st.Create(ctx, s, ""); err == nil {
-		t.Error("Create with no refresh token succeeded")
+	if err := st.Create(ctx, s); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := st.Create(ctx, s); err == nil {
+		t.Error("creating the same session twice succeeded")
+	}
+	if err := st.IssueRefresh(ctx, s.ID, "", time.Now()); err == nil {
+		t.Error("IssueRefresh with an empty token succeeded")
+	}
+	if err := st.IssueRefresh(ctx, "sess_nope", "tok", time.Now()); err == nil {
+		t.Error("IssueRefresh for an unknown session succeeded")
 	}
 }
 

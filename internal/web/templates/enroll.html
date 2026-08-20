@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Enroll an MCP client — whois-mcp</title>
+<style>
+  :root {
+    --bg: #fbfbfa; --fg: #1c1c1a; --muted: #5c5c56;
+    --line: #dcdcd6; --accent: #245868; --warn: #8a2b1f;
+    --card: #ffffff;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a; --fg: #e8e8e4; --muted: #a0a099;
+      --line: #33343a; --accent: #7fb2c4; --warn: #e8897c;
+      --card: #1e1f22;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1rem; background: var(--bg); color: var(--fg);
+    font: 16px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    display: flex; justify-content: center;
+  }
+  main { width: 100%; max-width: 34rem; }
+  h1 { font-size: 1.35rem; margin: 0 0 .35rem; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); margin: 0 0 1.5rem; font-size: .95rem; }
+  form {
+    background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+    padding: 1.35rem;
+  }
+  label { display: block; font-weight: 600; font-size: .9rem; margin-bottom: .35rem; }
+  .hint { color: var(--muted); font-size: .82rem; margin: .3rem 0 1.1rem; }
+  input[type=text], input[type=password] {
+    width: 100%; padding: .6rem .7rem; font-size: 1rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--fg); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 6px;
+  }
+  input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  button {
+    margin-top: .4rem; width: 100%; padding: .65rem 1rem; font-size: 1rem; font-weight: 600;
+    color: #fff; background: var(--accent); border: 0; border-radius: 6px; cursor: pointer;
+  }
+  button:hover { filter: brightness(1.08); }
+  .err {
+    border-left: 3px solid var(--warn); background: color-mix(in srgb, var(--warn) 8%, transparent);
+    padding: .7rem .9rem; border-radius: 4px; margin-bottom: 1.1rem; font-size: .92rem;
+  }
+  .scopes { border: 1px solid var(--line); border-radius: 6px; padding: .8rem .9rem; margin-bottom: 1.1rem; }
+  .scopes h2 { font-size: .82rem; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 .5rem; }
+  .scopes code { font-size: .85rem; }
+  .scopes li { margin-bottom: .2rem; }
+  ul { margin: 0; padding-left: 1.1rem; }
+  footer { color: var(--muted); font-size: .8rem; margin-top: 1.2rem; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Enroll an MCP client</h1>
+  <p class="sub">
+    Paste the enrollment token your operator gave you. This exchanges it for
+    tokens scoped to a single named session, which can be revoked on its own.
+  </p>
+
+  {{if .Error}}<div class="err" role="alert">{{.Error}}</div>{{end}}
+
+  {{if .Scopes}}
+  <div class="scopes">
+    <h2>This client is requesting</h2>
+    <ul>
+      {{range .Scopes}}<li><code>{{.Name}}</code> — {{.Description}}</li>{{end}}
+    </ul>
+  </div>
+  {{end}}
+
+  <form method="POST" action="{{.Action}}" autocomplete="off">
+    {{range .Hidden}}<input type="hidden" name="{{.Name}}" value="{{.Value}}">{{end}}
+
+    <label for="enrollment_token">Enrollment token</label>
+    <input id="enrollment_token" name="enrollment_token" type="password"
+           required autofocus autocomplete="off" spellcheck="false"
+           autocapitalize="off" inputmode="text">
+    <p class="hint">Used once, right now. It is not stored by the client and never sent to the MCP endpoint.</p>
+
+    <label for="label">Name this session</label>
+    <input id="label" name="label" type="text" maxlength="64"
+           placeholder="e.g. work laptop, CI runner" value="{{.Label}}">
+    <p class="hint">Shown when listing sessions, so you can tell which one to revoke later.</p>
+
+    <button type="submit">Enroll this client</button>
+  </form>
+
+  <footer>
+    {{if .ClientID}}Client: <code>{{.ClientID}}</code><br>{{end}}
+    Resource: <code>{{.Resource}}</code>
+  </footer>
+</main>
+</body>
+</html>

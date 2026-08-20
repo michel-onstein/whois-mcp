@@ -29,6 +29,24 @@ var (
 	ErrSessionRevoked = errors.New("session has been revoked")
 )
 
+// ReuseError reports a replayed refresh token and names the session that was
+// revoked because of it.
+//
+// It carries the sid rather than only a message because the caller has to act
+// on it — denylisting the session and raising an alert — and recovering an
+// identifier by parsing an error string is the kind of coupling that breaks
+// silently the first time the message is reworded.
+type ReuseError struct {
+	SID string
+}
+
+func (e *ReuseError) Error() string {
+	return fmt.Sprintf("refresh token was already used: session %s revoked as a precaution", e.SID)
+}
+
+// Unwrap lets errors.Is(err, ErrRefreshReused) keep working.
+func (e *ReuseError) Unwrap() error { return ErrRefreshReused }
+
 // Session is one enrollment: the token family created by one successful use of
 // the enrollment secret.
 //
@@ -64,8 +82,14 @@ func (s *Session) Active(now time.Time) bool {
 // hot request path deliberately avoids it: access tokens verify locally, and
 // only refresh and revocation touch the store.
 type SessionStore interface {
-	// Create records a new session and its first refresh token.
-	Create(ctx context.Context, s *Session, refreshToken string) error
+	// Create records a new session. It deliberately does not take a refresh
+	// token: a refresh token is only ever handed to a client by the token
+	// endpoint, so creating one at enrollment would mean a live token nobody
+	// holds, which breaks the one-time-use invariant the theft detection needs.
+	Create(ctx context.Context, s *Session) error
+	// IssueRefresh records the first refresh token for a session, at code
+	// exchange.
+	IssueRefresh(ctx context.Context, sid, token string, now time.Time) error
 	// Get returns a session by id.
 	Get(ctx context.Context, sid string) (*Session, error)
 	// List returns every session, newest first.
@@ -111,12 +135,9 @@ func NewMemoryStore() *MemoryStore {
 	}
 }
 
-func (m *MemoryStore) Create(_ context.Context, s *Session, refreshToken string) error {
+func (m *MemoryStore) Create(_ context.Context, s *Session) error {
 	if s == nil || s.ID == "" {
 		return errors.New("session id is required")
-	}
-	if refreshToken == "" {
-		return errors.New("refresh token is required")
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -125,7 +146,27 @@ func (m *MemoryStore) Create(_ context.Context, s *Session, refreshToken string)
 	}
 	copy := *s
 	m.sessions[s.ID] = &copy
-	m.refresh[refreshToken] = &refreshRecord{sid: s.ID, expiresAt: s.ExpiresAt}
+	return nil
+}
+
+func (m *MemoryStore) IssueRefresh(_ context.Context, sid, token string, now time.Time) error {
+	if token == "" {
+		return errors.New("refresh token is required")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.sessions[sid]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNoSession, sid)
+	}
+	if s.Revoked {
+		return fmt.Errorf("%w: %s", ErrSessionRevoked, sid)
+	}
+	if _, exists := m.refresh[token]; exists {
+		return errors.New("refresh token already issued")
+	}
+	s.LastSeen = now.UTC()
+	m.refresh[token] = &refreshRecord{sid: sid, expiresAt: s.ExpiresAt}
 	return nil
 }
 
@@ -176,7 +217,7 @@ func (m *MemoryStore) Rotate(_ context.Context, oldToken, newToken string, now t
 		s.Revoked = true
 		s.RevokedAt = now.UTC()
 		m.revokeFamilyLocked(s.ID, now)
-		return nil, fmt.Errorf("%w: session %s revoked as a precaution", ErrRefreshReused, s.ID)
+		return nil, &ReuseError{SID: s.ID}
 	}
 	if s.Revoked {
 		return nil, fmt.Errorf("%w: %s", ErrSessionRevoked, s.ID)
