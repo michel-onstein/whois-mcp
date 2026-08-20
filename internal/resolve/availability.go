@@ -2,6 +2,7 @@ package resolve
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,11 +23,16 @@ const AvailabilityTimeout = 4 * time.Second
 
 // availabilityConcurrency bounds parallel upstream queries within one batch.
 //
-// Deliberately modest. M3 adds real per-upstream token buckets; until then this
-// is the only thing standing between a fifty-name batch and fifty simultaneous
-// connections to the same registry, which is exactly the behaviour that earns
-// a rate-limit block.
-const availabilityConcurrency = 4
+// Now that M3's per-upstream token buckets exist, this is no longer the only
+// thing protecting a registry — but it is still what protects the *batch*. The
+// limiter paces each host; this bounds how many goroutines sit waiting for a
+// token at once, which is what keeps a fifty-name batch from holding fifty
+// blocked goroutines and its own deadline hostage.
+//
+// Raised from 4 to 8 at M5 because the limiter now does the pacing: the
+// concurrency here only has to be small enough that queueing is bounded, not
+// small enough to be polite on its own.
+const availabilityConcurrency = 8
 
 // Availability is the cheap per-domain answer: no contacts, no referral, no
 // full report.
@@ -56,9 +62,32 @@ func (r *Resolver) CheckAvailability(ctx context.Context, domains []string, maxA
 	}
 	out := make([]Availability, len(domains))
 
+	// Deduplicate before dispatching. A batch of candidate names routinely
+	// repeats entries, and while singleflight collapses concurrent duplicates
+	// anyway, doing it here also stops duplicates consuming batch concurrency
+	// slots — so fifty names with twenty duplicates checks thirty things rather
+	// than queueing fifty.
+	first := make(map[string]int, len(domains))
+	var order []int
+	for i, d := range domains {
+		key := strings.ToLower(strings.TrimSpace(d))
+		if key == "" {
+			order = append(order, i)
+			continue
+		}
+		if j, seen := first[key]; seen {
+			// Point the duplicate at the canonical result once it is known.
+			out[i].Domain = d
+			_ = j
+			continue
+		}
+		first[key] = i
+		order = append(order, i)
+	}
+
 	sem := make(chan struct{}, availabilityConcurrency)
 	var wg sync.WaitGroup
-	for i, d := range domains {
+	for _, i := range order {
 		wg.Add(1)
 		go func(i int, input string) {
 			defer wg.Done()
@@ -71,9 +100,22 @@ func (r *Resolver) CheckAvailability(ctx context.Context, domains []string, maxA
 				return
 			}
 			out[i] = r.checkOne(ctx, input, maxAge)
-		}(i, d)
+		}(i, domains[i])
 	}
 	wg.Wait()
+
+	// Fill the duplicates in from their canonical entry, so the caller still
+	// gets one result per input in the order requested.
+	for i, d := range domains {
+		key := strings.ToLower(strings.TrimSpace(d))
+		if j, ok := first[key]; ok && j != i {
+			dup := out[j]
+			// The echoed domain stays as the caller wrote it; everything else is
+			// the shared answer.
+			dup.Domain = out[j].Domain
+			out[i] = dup
+		}
+	}
 	return out
 }
 

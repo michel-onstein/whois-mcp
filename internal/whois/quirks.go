@@ -60,6 +60,48 @@ var quirks = map[string]Quirk{
 		Why: "SIDN's referral line points at a registrar web form rather than a " +
 			"WHOIS service, so following it wastes a hop and a deadline.",
 	},
+
+	// Added at M5, from what the M1 fixture work showed to be missing. Each
+	// entry is here because the generic path produced a materially worse answer
+	// for that registry, not merely a different one.
+	"kr": {
+		QueryFormat: "%s",
+		Why: "KISA answers in Korean by default on some paths but honours no " +
+			"query flag; listed so its unusual spaced-dotted date format is " +
+			"discoverable from tld_info rather than only from the parser table.",
+	},
+	"br": {
+		NoReferral: true,
+		Why: "NIC.br publishes registrar handles rather than a registrar WHOIS " +
+			"host, so there is nothing to refer to and a referral attempt only " +
+			"costs a deadline.",
+	},
+	"au": {
+		NoReferral: true,
+		Why: "auDA is registry-only by policy — it publishes no dates and no " +
+			"registrar WHOIS server — so a referral hop finds nothing.",
+	},
+	"eu": {
+		NoReferral: true,
+		Why: "EURid's referral points at a registrar website, not a WHOIS " +
+			"service.",
+	},
+	"ru": {
+		NoReferral: true,
+		Why: "TCI publishes an admin-contact URL rather than a registrar WHOIS " +
+			"host; following it is a wasted hop.",
+	},
+	"ch": {
+		QueryFormat: "%s",
+		Why: "SWITCH rate-limits aggressively per IP and phrases its negative as " +
+			"a sentence with no keyword; listed so both facts are visible in " +
+			"tld_info alongside the parser template.",
+	},
+	"it": {
+		NoReferral: true,
+		Why: "IIT-CNR reports registrar detail inline and publishes no registrar " +
+			"WHOIS host.",
+	},
 }
 
 // QueryFor renders the line to send for a domain in a TLD, applying any quirk.

@@ -84,6 +84,15 @@ func run() error {
 		ratelimit.NewBreaker(ratelimit.BreakerOptions{}),
 	)
 
+	netReg, err := rdapx.NewNetRegistry()
+	if err != nil {
+		return fmt.Errorf("loading IP/ASN bootstrap: %w", err)
+	}
+	v4, v6, asn := netReg.Counts()
+	log.Info("IP/ASN bootstrap loaded from embedded snapshot",
+		"ipv4_prefixes", v4, "ipv6_prefixes", v6, "asn_ranges", asn,
+		"published", netReg.Publication().Format(time.RFC3339))
+
 	hc := rdapx.NewHTTPClient(rdapx.DefaultTimeout)
 	rc := rdapx.NewClient(reg, hc, rdapx.DefaultUserAgent(mcpsrv.Version)).WithGuard(guard)
 
@@ -96,7 +105,7 @@ func run() error {
 	defer func() { _ = backends.close() }()
 	store := backends.cache
 	wc := whois.NewClient(whois.NewTransport(whois.DefaultTimeout).WithGuard(guard), store, log)
-	res := resolve.New(rc, wc, store, log)
+	res := resolve.New(rc, wc, store, log).WithNetRegistry(netReg)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -104,6 +113,7 @@ func run() error {
 	// Refresh the bootstrap map in the background. A failure is logged and
 	// tolerated: the embedded snapshot keeps the server useful.
 	go refreshBootstrap(ctx, reg, hc, cfg.bootstrapURL, log)
+	go refreshNetBootstrap(ctx, netReg, hc, log)
 
 	metrics := obs.NewMetrics()
 	tracer, shutdownTracing, err := obs.InitTracing(ctx, obs.TraceOptions{
@@ -132,7 +142,7 @@ func run() error {
 		return err
 	}
 
-	mopt := mcpsrv.Options{Resolver: res, Registry: reg, Log: log}
+	mopt := mcpsrv.Options{Resolver: res, Registry: reg, Log: log, NetLookups: true}
 	if stack != nil {
 		mopt.Auth = mcpsrv.AuthOptions{Sessions: stack.sessions, Denylist: stack.denylist}
 		mopt.EnforceScopes = true
@@ -317,6 +327,40 @@ func publishGauges(ctx context.Context, m *obs.Metrics, guard *ratelimit.Guard, 
 			return
 		case <-t.C:
 			publish()
+		}
+	}
+}
+
+// refreshNetBootstrap keeps the IP and ASN maps current.
+//
+// Separate from the domain refresh because it fetches three files rather than
+// one and tolerates partial success: a failure on any single file leaves that
+// family's previous data in place, since stale bootstrap data is far better than
+// none.
+func refreshNetBootstrap(ctx context.Context, reg *rdapx.NetRegistry, hc *http.Client, log *slog.Logger) {
+	do := func() {
+		rctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if err := reg.Refresh(rctx, hc, rdapx.BootstrapIPv4URL, rdapx.BootstrapIPv6URL, rdapx.BootstrapASNURL); err != nil {
+			v4, v6, asn := reg.Counts()
+			log.Warn("IP/ASN bootstrap refresh incomplete; continuing with existing data",
+				"error", err, "ipv4_prefixes", v4, "ipv6_prefixes", v6, "asn_ranges", asn)
+			return
+		}
+		v4, v6, asn := reg.Counts()
+		log.Info("IP/ASN bootstrap refreshed",
+			"ipv4_prefixes", v4, "ipv6_prefixes", v6, "asn_ranges", asn,
+			"published", reg.Publication().Format(time.RFC3339))
+	}
+	do()
+	t := time.NewTicker(24 * time.Hour)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			do()
 		}
 	}
 }

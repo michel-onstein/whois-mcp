@@ -58,6 +58,11 @@ type Resolver struct {
 
 	// policy is the cache TTL table (design §9).
 	policy TTLPolicy
+
+	// netReg maps IP prefixes and ASNs to RIR RDAP services. Nil disables
+	// ip_lookup, which is the M0-M4 shape: the tool is simply not registered
+	// rather than registered and failing.
+	netReg *rdapx.NetRegistry
 }
 
 // New returns a Resolver. A nil WHOIS client disables the fallback, which
