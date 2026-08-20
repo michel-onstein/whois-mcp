@@ -1,0 +1,3 @@
+%% This is the AFNIC Whois server.
+
+%% No entries found in the AFNIC Database.

@@ -1,0 +1,13 @@
+[ JPRS database provides information on network administration. ]
+
+Domain Information:
+[Domain Name]                   EXAMPLE.JP
+[Registrant]                    Example Organization
+[Name Server]                   ns1.example-dns.test
+[Name Server]                   ns2.example-dns.test
+[Signing Key]
+
+[Created on]                    2001/04/01
+[Expires on]                    2027/04/30
+[Status]                        Active
+[Last Updated]                  2026/05/01 01:05:03 (JST)

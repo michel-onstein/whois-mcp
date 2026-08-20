@@ -1,0 +1,2 @@
+Domain: nosuchdomain-qjam-test.de
+Status: free
