@@ -137,7 +137,7 @@ func run() error {
 	// "something is wrong" into "this registry is down" on a dashboard.
 	go publishGauges(ctx, metrics, guard, backends, log)
 
-	stack, err := buildAuth(cfg, acfg, store, log)
+	stack, err := buildAuth(cfg, acfg, store, backends.sessions, log)
 	if err != nil {
 		return err
 	}
