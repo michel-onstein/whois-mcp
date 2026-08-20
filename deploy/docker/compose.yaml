@@ -25,6 +25,15 @@ services:
       - "6379"
 
   whois-mcp: &server
+    # Both `image` and `build` on purpose. With both, `docker compose up` builds
+    # once and tags the result, and the second replica reuses that tag rather
+    # than building its own copy — which is also what lets CI build the image
+    # separately and bring the stack up with --no-build.
+    #
+    # Without the explicit name, compose derives one per service
+    # (whois-mcp-whois-mcp-2) and --no-build then fails looking for an image
+    # nothing ever built.
+    image: ${WHOIS_MCP_IMAGE:-whois-mcp:compose}
     build:
       context: ../..
       dockerfile: Dockerfile
