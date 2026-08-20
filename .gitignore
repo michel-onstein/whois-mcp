@@ -13,5 +13,9 @@ docs/*.html
 .env
 .env.local
 
+# Claude Code session state — worktrees under .claude/worktrees/ are whole
+# checkouts, and the rest is per-machine session state. Never committed.
+/.claude/
+
 # macOS
 .DS_Store
