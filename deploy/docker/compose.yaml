@@ -1,0 +1,68 @@
+# Integration stack for the shared-cache path (design §11.2).
+#
+# The point is to exercise what unit tests structurally cannot: two replicas
+# behind one Redis, so a session enrolled against one can refresh against the
+# other. With per-replica memory stores that flow silently breaks, and no amount
+# of single-process testing notices.
+
+name: whois-mcp
+
+services:
+  redis:
+    image: redis:7-alpine
+    # No persistence: everything here has a TTL and nothing is a source of
+    # truth. appendonly would only add a file to clean up.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 15
+    # Not published to the host by default: the stack talks over the compose
+    # network, and exposing Redis is how a development container ends up
+    # reachable from a coffee shop.
+    expose:
+      - "6379"
+
+  whois-mcp: &server
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      args:
+        VERSION: ${VERSION:-compose}
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      WHOIS_MCP_LISTEN: ":8080"
+      # The canonical URI, and therefore the token audience. It must match what
+      # a client actually connects to or every token is rejected.
+      WHOIS_MCP_PUBLIC_URL: "http://localhost:8080"
+      WHOIS_MCP_ENROLLMENT_TOKEN: "${WHOIS_MCP_ENROLLMENT_TOKEN:?set WHOIS_MCP_ENROLLMENT_TOKEN, e.g. export WHOIS_MCP_ENROLLMENT_TOKEN=$(openssl rand -base64 32)}"
+      # Shared across replicas on purpose: a per-replica key means each replica
+      # rejects the others' tokens, which presents as random 401s.
+      WHOIS_MCP_SIGNING_KEY: "${WHOIS_MCP_SIGNING_KEY:?set WHOIS_MCP_SIGNING_KEY to a base64 Ed25519 seed}"
+      WHOIS_MCP_CACHE: "redis"
+      WHOIS_MCP_SESSION_STORE: "redis"
+      WHOIS_MCP_REDIS_URL: "redis://redis:6379/0"
+      WHOIS_MCP_LOG_LEVEL: "${WHOIS_MCP_LOG_LEVEL:-info}"
+    ports:
+      - "8080:8080"
+    read_only: true
+    user: "65532:65532"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      # The image has no shell and no curl, so the check runs from the compose
+      # host via a sidecar rather than inside the container. Kubernetes probes
+      # /readyz over HTTP instead, which is the real deployment path.
+      disable: true
+
+  # A second replica against the same Redis. This is the whole reason the file
+  # exists: it makes cross-replica session sharing testable.
+  whois-mcp-2:
+    <<: *server
+    ports:
+      - "8081:8080"
