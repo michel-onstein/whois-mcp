@@ -16,8 +16,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
-	"github.com/qjam/whois-mcp/internal/cache"
 	"github.com/qjam/whois-mcp/internal/mcpsrv"
 	"github.com/qjam/whois-mcp/internal/obs"
 	"github.com/qjam/whois-mcp/internal/ratelimit"
@@ -37,6 +37,7 @@ type config struct {
 	listen       string
 	logLevel     string
 	bootstrapURL string
+	otelEndpoint string
 }
 
 func loadConfig() config {
@@ -44,6 +45,7 @@ func loadConfig() config {
 		listen:       env("WHOIS_MCP_LISTEN", "127.0.0.1:8080"),
 		logLevel:     env("WHOIS_MCP_LOG_LEVEL", "info"),
 		bootstrapURL: env("WHOIS_MCP_RDAP_BOOTSTRAP_URL", rdapx.BootstrapURL),
+		otelEndpoint: env("WHOIS_MCP_OTEL_ENDPOINT", ""),
 	}
 }
 
@@ -85,9 +87,14 @@ func run() error {
 	hc := rdapx.NewHTTPClient(rdapx.DefaultTimeout)
 	rc := rdapx.NewClient(reg, hc, rdapx.DefaultUserAgent(mcpsrv.Version)).WithGuard(guard)
 
-	// One cache backs both protocols and the WHOIS host map; M3 swaps in Redis
-	// behind the same interface.
-	store := cache.NewMemory()
+	// One cache backs both protocols and the WHOIS host map; Redis slots in
+	// behind the same interface (design §9-§10).
+	backends, err := buildStores(context.Background(), loadStoreConfig(), log)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = backends.close() }()
+	store := backends.cache
 	wc := whois.NewClient(whois.NewTransport(whois.DefaultTimeout).WithGuard(guard), store, log)
 	res := resolve.New(rc, wc, store, log)
 
@@ -97,6 +104,28 @@ func run() error {
 	// Refresh the bootstrap map in the background. A failure is logged and
 	// tolerated: the embedded snapshot keeps the server useful.
 	go refreshBootstrap(ctx, reg, hc, cfg.bootstrapURL, log)
+
+	metrics := obs.NewMetrics()
+	tracer, shutdownTracing, err := obs.InitTracing(ctx, obs.TraceOptions{
+		Endpoint:       cfg.otelEndpoint,
+		ServiceName:    "whois-mcp",
+		ServiceVersion: mcpsrv.Version,
+	}, log)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := shutdownTracing(shutdownCtx); err != nil {
+			log.Warn("flushing traces", "error", err)
+		}
+	}()
+	_ = tracer // spans are attached at the upstream call sites
+
+	// Keep the breaker and session gauges current. Cheap, and it is what turns
+	// "something is wrong" into "this registry is down" on a dashboard.
+	go publishGauges(ctx, metrics, guard, backends, log)
 
 	stack, err := buildAuth(cfg, acfg, store, log)
 	if err != nil {
@@ -130,14 +159,36 @@ func run() error {
 	} else {
 		mux.Handle("/mcp", handler)
 	}
+	mux.Handle("/metrics", promhttp.HandlerFor(metrics.Registry(),
+		promhttp.HandlerOpts{ErrorHandling: promhttp.ContinueOnError}))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ok")
 	})
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+	// /readyz is gated on everything a replica needs in order to answer, so a
+	// replica that cannot is taken out of rotation rather than left to fail
+	// requests: the bootstrap map, the cache backend, and — per plan task 3.1 —
+	// the assertion that we are not serving unauthenticated off-host.
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		if reg.Count() == 0 {
-			http.Error(w, "bootstrap registry empty", http.StatusServiceUnavailable)
+			http.Error(w, "not ready: bootstrap registry empty", http.StatusServiceUnavailable)
 			return
+		}
+		if stack == nil && requireLoopback(cfg.listen) != nil {
+			// Defence in depth. checkExposure already refuses to start in this
+			// state, so reaching here means something bypassed it — and a
+			// replica in this state must not receive traffic.
+			http.Error(w, "not ready: no authentication configured on a non-loopback listener",
+				http.StatusServiceUnavailable)
+			return
+		}
+		if backends.ready != nil {
+			checkCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+			defer cancel()
+			if err := backends.ready(checkCtx); err != nil {
+				http.Error(w, "not ready: cache backend unreachable", http.StatusServiceUnavailable)
+				return
+			}
 		}
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintln(w, "ready")
@@ -226,4 +277,46 @@ func refreshBootstrap(ctx context.Context, reg *rdapx.Registry, hc *http.Client,
 // enough for a debugging session without being indefinite.
 func nowPlusHour() time.Time {
 	return time.Now().Add(time.Hour)
+}
+
+// publishGauges keeps the breaker and session gauges current.
+//
+// Counters and histograms are updated where the work happens; these two are
+// state rather than events, so they need a poller. The interval is short enough
+// that a dashboard shows a registry going down within a scrape or two.
+func publishGauges(ctx context.Context, m *obs.Metrics, guard *ratelimit.Guard, backends *stores, log *slog.Logger) {
+	t := time.NewTicker(15 * time.Second)
+	defer t.Stop()
+
+	// Hosts that have ever been open, so a recovered host is published as 0
+	// rather than silently disappearing from the series — a vanished series
+	// looks like a scrape failure, not a recovery.
+	known := make(map[string]bool)
+
+	publish := func() {
+		open := guard.OpenHosts()
+		nowOpen := make(map[string]bool, len(open))
+		for _, host := range open {
+			nowOpen[host] = true
+			known[host] = true
+			m.SetBreakerOpen(host, true)
+		}
+		for host := range known {
+			if !nowOpen[host] {
+				m.SetBreakerOpen(host, false)
+			}
+		}
+		if n := backends.activeSessions(ctx, time.Now().UTC()); n >= 0 {
+			m.SetActiveSessions(n)
+		}
+	}
+	publish()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			publish()
+		}
+	}
 }

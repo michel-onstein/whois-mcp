@@ -45,3 +45,83 @@ jobs:
       - uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+
+  # The Redis-backed tests are opt-in via an env var so the suite above stays
+  # hermetic. This job is where they actually run, against a real Redis rather
+  # than a fake — the atomicity of refresh-token rotation depends on Redis
+  # executing a Lua script atomically, and a fake would only test our belief
+  # about that.
+  redis:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 2s
+          --health-timeout 2s
+          --health-retries 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+      - name: Test against Redis
+        env:
+          WHOIS_MCP_TEST_REDIS_URL: redis://127.0.0.1:6379/0
+        run: go test -race ./internal/cache/ ./internal/auth/
+
+  # Build the image and exercise the full stack end to end: enrollment, a
+  # lookup, and — the part that only a multi-replica stack can show — a session
+  # enrolled against one replica refreshing against the other through shared
+  # Redis. With per-replica memory stores that flow breaks silently.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t whois-mcp:ci --build-arg VERSION=ci-${GITHUB_SHA::7} .
+
+      - name: Report image size
+        run: docker images whois-mcp:ci --format '{{.Repository}}:{{.Tag}} {{.Size}}'
+
+      - name: Generate secrets
+        run: |
+          echo "WHOIS_MCP_ENROLLMENT_TOKEN=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+          # A 32-byte Ed25519 seed, base64. Shared across both replicas on
+          # purpose: a per-replica key means each rejects the other's tokens.
+          echo "WHOIS_MCP_SIGNING_KEY=$(openssl rand -base64 32)" >> "$GITHUB_ENV"
+
+      - name: Start the stack
+        working-directory: deploy/docker
+        run: |
+          docker compose up -d --no-build --scale whois-mcp=1
+          # The image has no shell, so readiness is polled from here rather than
+          # with a container HEALTHCHECK.
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/readyz >/dev/null 2>&1 \
+               && curl -fsS http://localhost:8081/readyz >/dev/null 2>&1; then
+              echo "both replicas ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "replicas did not become ready"; docker compose logs; exit 1
+        env:
+          VERSION: ci
+
+      - name: End-to-end enrollment, lookup and cross-replica refresh
+        run: ./scripts/e2e.sh
+
+      - name: Stack logs on failure
+        if: failure()
+        working-directory: deploy/docker
+        run: docker compose logs
+
+      - name: Tear down
+        if: always()
+        working-directory: deploy/docker
+        run: docker compose down -v
