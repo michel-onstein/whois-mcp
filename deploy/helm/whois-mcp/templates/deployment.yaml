@@ -50,9 +50,10 @@ spec:
           env:
             - name: WHOIS_MCP_LISTEN
               value: ":{{ .Values.service.port }}"
-            # The canonical URI, and therefore the token audience.
+            # The canonical URI, and therefore the token audience. Derived
+            # from ingress.host when publicURL is unset.
             - name: WHOIS_MCP_PUBLIC_URL
-              value: {{ .Values.publicURL | quote }}
+              value: {{ include "whois-mcp.publicURL" . | quote }}
             - name: WHOIS_MCP_ENROLLMENT_TOKEN
               valueFrom:
                 secretKeyRef:

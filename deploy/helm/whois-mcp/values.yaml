@@ -21,8 +21,17 @@ replicaCount: 2
 # OAuth issuer and, with /mcp appended, the token audience.
 #
 # Getting it wrong does not degrade anything: it rejects every token, because
-# the aud in a minted token will not match the aud the verifier expects. It is
-# required, and the chart refuses to render without it.
+# the aud in a minted token will not match the aud the verifier expects.
+#
+# Leave it empty and it is derived as https://<ingress.host>, which is what you
+# want whenever the ingress is how clients reach this server — the two values
+# name the same host, and setting only one of them is the mistake. Set it
+# explicitly when clients arrive under some other name (a CDN, a proxy that
+# rewrites Host) or when ingress.path is not "/", where the chart cannot know
+# whether the controller rewrites the prefix. With no ingress it is required.
+#
+# An explicit value that disagrees with ingress.host is refused: the controller
+# matches on Host, so requests to it would never reach this release.
 publicURL: ""
 
 # ---------------------------------------------------------------- secrets
@@ -74,7 +83,14 @@ ingress:
   enabled: true
   className: ""
   annotations: {}
+  # host doubles as the source for publicURL when that is left empty, so it is
+  # the one hostname to get right.
+  #
+  # A wildcard ("*.example.com") is routed by the controller but cannot be
+  # derived from, so publicURL must be set explicitly alongside it.
   host: ""
+  # A path other than "/" means publicURL cannot be derived: whether clients
+  # address the prefix depends on a rewrite annotation this chart cannot read.
   path: /
   pathType: Prefix
   tls:

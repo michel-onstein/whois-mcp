@@ -80,7 +80,6 @@ request on a third party to learn nothing.
 
 ```bash
 helm install whois-mcp deploy/helm/whois-mcp \
-  --set publicURL=https://whois.example \
   --set ingress.host=whois.example \
   --set secrets.existingSecret=whois-mcp-secrets \
   --set redis.url=redis://redis:6379/0
@@ -93,6 +92,13 @@ deploy cleanly and then misbehave — a cleartext or trailing-slash `publicURL`
 NetworkPolicy without egress on **port 43**. That last one is worth repeating:
 without port 43 every ccTLD that publishes no RDAP service becomes unresolvable,
 and the symptom reads like a parser bug rather than a firewall rule.
+
+`publicURL` defaults to `https://<ingress.host>`, so the hostname is stated once.
+Set it explicitly only when clients arrive under another name, or when
+`ingress.path` is not `/` or the host is a wildcard — neither can be derived
+from, and the chart says so instead of guessing. An explicit value that
+disagrees with `ingress.host` is refused: the controller matches on `Host`, so
+requests to it would never reach the release.
 
 The signing key comes from a single Secret, so replicas necessarily share it. A
 per-replica key makes each replica reject the others' tokens, which surfaces as

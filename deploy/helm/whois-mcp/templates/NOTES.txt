@@ -1,6 +1,6 @@
 whois-mcp {{ .Chart.AppVersion }} installed as {{ .Release.Name }}.
 
-  Endpoint:  {{ .Values.publicURL }}/mcp
+  Endpoint:  {{ include "whois-mcp.publicURL" . }}/mcp
   Replicas:  {{ if .Values.autoscaling.enabled }}{{ .Values.autoscaling.minReplicas }}-{{ .Values.autoscaling.maxReplicas }} (HPA){{ else }}{{ .Values.replicaCount }}{{ end }}
   Cache:     {{ .Values.cache }}
   Sessions:  {{ .Values.sessionStore }}
@@ -11,9 +11,9 @@ Nothing works until a client enrolls. The enrollment token is not a request
 credential — it is used once, in a browser, and exchanged for tokens scoped to a
 single named session that can be revoked on its own.
 
-  1. Point your MCP client at {{ .Values.publicURL }}/mcp
+  1. Point your MCP client at {{ include "whois-mcp.publicURL" . }}/mcp
   2. It gets a 401 and discovers the authorization server automatically.
-  3. It opens a browser at {{ .Values.publicURL }}/oauth/authorize
+  3. It opens a browser at {{ include "whois-mcp.publicURL" . }}/oauth/authorize
   4. Paste the enrollment token and name the session.
 
 To read the token you deployed with:
@@ -39,8 +39,8 @@ never holds a credential that can dump contact data.
 {{ if .Values.ingress.enabled }}
 CHECKING IT
 
-  curl -fsS {{ .Values.publicURL }}/readyz
-  curl -fsS {{ .Values.publicURL }}/.well-known/oauth-protected-resource
+  curl -fsS {{ include "whois-mcp.publicURL" . }}/readyz
+  curl -fsS {{ include "whois-mcp.publicURL" . }}/.well-known/oauth-protected-resource
 {{- else }}
 CHECKING IT (no ingress; port-forward)
 
