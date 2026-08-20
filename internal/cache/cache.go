@@ -41,6 +41,7 @@ func NewMemory() *Memory {
 	return &Memory{items: make(map[string]entry), now: time.Now}
 }
 
+// Get returns the value if present and unexpired, evicting it lazily if not.
 func (m *Memory) Get(_ context.Context, key string) ([]byte, bool) {
 	m.mu.RLock()
 	e, ok := m.items[key]
@@ -60,6 +61,7 @@ func (m *Memory) Get(_ context.Context, key string) ([]byte, bool) {
 	return e.val, true
 }
 
+// Set stores a value. A non-positive ttl is a no-op, per the Cache contract.
 func (m *Memory) Set(_ context.Context, key string, val []byte, ttl time.Duration) {
 	if ttl <= 0 {
 		return
@@ -69,6 +71,7 @@ func (m *Memory) Set(_ context.Context, key string, val []byte, ttl time.Duratio
 	m.mu.Unlock()
 }
 
+// Delete removes a key if present.
 func (m *Memory) Delete(_ context.Context, key string) {
 	m.mu.Lock()
 	delete(m.items, key)

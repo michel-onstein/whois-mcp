@@ -14,6 +14,8 @@ import "time"
 // user that a taken domain is free is this server's worst failure mode.
 type Tristate string
 
+// The three answers. Unknown is not a failure: it is the honest report when
+// the upstream signal was ambiguous.
 const (
 	Yes     Tristate = "yes"
 	No      Tristate = "no"
@@ -23,6 +25,7 @@ const (
 // Protocol identifies which upstream answered.
 type Protocol string
 
+// The two upstream protocols.
 const (
 	ProtoRDAP  Protocol = "rdap"
 	ProtoWHOIS Protocol = "whois"

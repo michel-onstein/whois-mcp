@@ -118,6 +118,7 @@ func (s *RedisStore) ctx(ctx context.Context) (context.Context, context.CancelFu
 	return context.WithTimeout(ctx, s.timeout)
 }
 
+// Create records a session, refusing to overwrite a live one.
 func (s *RedisStore) Create(ctx context.Context, sess *Session) error {
 	if sess == nil || sess.ID == "" {
 		return errors.New("session id is required")
@@ -147,7 +148,9 @@ func (s *RedisStore) Create(ctx context.Context, sess *Session) error {
 	return nil
 }
 
-func (s *RedisStore) IssueRefresh(ctx context.Context, sid, token string, now time.Time) error {
+// IssueRefresh records a session's first refresh token, bounded by the
+// session's own expiry.
+func (s *RedisStore) IssueRefresh(ctx context.Context, sid, token string, _ time.Time) error {
 	if token == "" {
 		return errors.New("refresh token is required")
 	}
@@ -179,6 +182,7 @@ func (s *RedisStore) IssueRefresh(ctx context.Context, sid, token string, now ti
 	return nil
 }
 
+// Get returns a session by id.
 func (s *RedisStore) Get(ctx context.Context, sid string) (*Session, error) {
 	ctx, cancel := s.ctx(ctx)
 	defer cancel()
@@ -200,6 +204,8 @@ func (s *RedisStore) get(ctx context.Context, sid string) (*Session, error) {
 	return &sess, nil
 }
 
+// List returns every session, newest first, pruning index entries whose
+// records have expired.
 func (s *RedisStore) List(ctx context.Context) ([]*Session, error) {
 	ctx, cancel := s.ctx(ctx)
 	defer cancel()
@@ -234,6 +240,8 @@ func (s *RedisStore) List(ctx context.Context) ([]*Session, error) {
 	return out, nil
 }
 
+// Rotate consumes a refresh token and issues its successor in one atomic step,
+// which is what makes the reuse detection real across replicas.
 func (s *RedisStore) Rotate(ctx context.Context, oldToken, newToken string, now time.Time) (*Session, error) {
 	ctx, cancel := s.ctx(ctx)
 	defer cancel()
@@ -300,6 +308,8 @@ func (s *RedisStore) Rotate(ctx context.Context, oldToken, newToken string, now 
 	}
 }
 
+// Revoke marks a session revoked without changing its record's TTL, so
+// session_list still shows it.
 func (s *RedisStore) Revoke(ctx context.Context, sid string, now time.Time) error {
 	ctx, cancel := s.ctx(ctx)
 	defer cancel()
@@ -322,6 +332,7 @@ func (s *RedisStore) Revoke(ctx context.Context, sid string, now time.Time) erro
 	return nil
 }
 
+// Touch updates last-seen.
 func (s *RedisStore) Touch(ctx context.Context, sid string, now time.Time) error {
 	ctx, cancel := s.ctx(ctx)
 	defer cancel()

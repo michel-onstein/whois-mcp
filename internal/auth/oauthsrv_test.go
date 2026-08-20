@@ -636,7 +636,7 @@ func TestAuthCodeExpires(t *testing.T) {
 	cs.now = func() time.Time { return base }
 	verifier, challenge := pkce()
 
-	code, err := cs.Issue(&AuthCode{SessionID: "sess_1", Challenge: challenge,
+	code, err := cs.Issue(&Code{SessionID: "sess_1", Challenge: challenge,
 		RedirectURI: "https://c.example/cb"})
 	if err != nil {
 		t.Fatalf("Issue: %v", err)

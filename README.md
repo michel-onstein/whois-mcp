@@ -7,13 +7,15 @@ over RDAP, with a WHOIS fallback for the ccTLDs that publish no RDAP service.
 - Design: [`docs/MCP_DESIGN.md`](docs/MCP_DESIGN.md)
 - Build order: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)
 
-## Status: M4
+## Status: M5 — all milestones landed
 
 **Any TLD resolves.** RDAP covers the gTLDs (~1,200 TLDs); the port-43 WHOIS
 fallback covers the ccTLDs that publish no RDAP service, and also rescues a
 lookup whose RDAP endpoint answered ambiguously.
 
-Tools: `domain_lookup`, `domain_availability` (batch of up to 50), `tld_info`.
+Tools: `domain_lookup`, `domain_availability` (batch of up to 50, deduplicated),
+`tld_info`, `ip_lookup`, plus `rdap_raw` / `whois_raw` and
+`session_list` / `session_revoke` behind their own scopes.
 Resource: `whois://bootstrap/tlds`.
 
 WHOIS text is parsed in two tiers — a per-host template for the ~40 registries
@@ -59,8 +61,20 @@ unauthenticated instance reachable from a network is an open proxy that queries
 registries from your egress IP, and the resulting block presents as a total
 outage for the affected TLD.
 
-Not yet implemented: M5 (`ip_lookup` / ASN lookups via the RIRs), which the plan
-marks explicitly deferrable.
+`ip_lookup` resolves IP addresses, CIDR prefixes and ASNs against the responsible
+Regional Internet Registry, using the IANA RFC 9224 bootstrap files for IPv4,
+IPv6 and ASNs (embedded, refreshed daily).
+
+One caveat the tool states every time it answers: the `country` field is the
+**registered** country of an allocation. It is administrative, not geographic —
+it says who registered the range, not where any host using it sits. It is
+routinely misread as geolocation, so the tool says so rather than leaving an
+agent to infer it.
+
+Private, reserved and loopback addresses are refused locally without an upstream
+request. IANA's bootstrap file does not carve those ranges out of the RIR
+allocations it lists, so a lookup for `192.168.1.1` would otherwise spend a
+request on a third party to learn nothing.
 
 ## Kubernetes
 

@@ -131,7 +131,7 @@ func (c *Client) QueryWithOptions(ctx context.Context, q normalize.Query, opt Qu
 		req := rdap.NewDomainRequest(q.ASCII).WithServer(u).WithContext(ctx)
 
 		var resp *rdap.Response
-		gerr := c.guard.Do(ctx, base, func(ctx context.Context) ratelimit.Outcome {
+		gerr := c.guard.Do(ctx, base, func(context.Context) ratelimit.Outcome {
 			r, e := c.rc.Do(req)
 			resp = r
 			return ratelimit.Outcome{

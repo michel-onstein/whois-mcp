@@ -147,16 +147,16 @@ func (r *Registry) FromNetwork() bool {
 	return r.fromNetwork
 }
 
-// Age reports how long ago the current data was loaded.
-// LoadedAt reports when the current data was loaded, which is what tells a
-// reader whether a stale publication timestamp means "IANA has not published"
-// or "we have not refreshed".
+// LoadedAt reports when the current data was loaded. It is what tells a reader
+// whether a stale publication timestamp means "IANA has not published" or "we
+// have not refreshed".
 func (r *Registry) LoadedAt() time.Time {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.loadedAt
 }
 
+// Age reports how long since the current data was loaded.
 func (r *Registry) Age() time.Duration {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -208,7 +208,7 @@ func (r *Registry) Refresh(ctx context.Context, hc *http.Client, url string) err
 	if err != nil {
 		return fmt.Errorf("fetching %s: %w", url, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotModified {
 		r.mu.Lock()

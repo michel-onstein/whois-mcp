@@ -53,6 +53,9 @@ type Options struct {
 	// unauthenticated build, where there is no token to carry a scope and
 	// enforcing would refuse every call.
 	EnforceScopes bool
+	// NetLookups registers ip_lookup. Off when no IP/ASN bootstrap registry is
+	// configured, so the tool is absent rather than present and failing.
+	NetLookups bool
 }
 
 // New builds an MCP server with the tool surface registered.
@@ -74,6 +77,7 @@ func New(opt Options) *mcp.Server {
 
 	registerM1(s, opt)
 	registerM2(s, opt)
+	registerM5(s, opt)
 
 	return s
 }

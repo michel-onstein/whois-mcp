@@ -31,8 +31,8 @@ var (
 	ErrRedirectMismatch = errors.New("redirect_uri does not match the authorization request")
 )
 
-// AuthCode is one issued authorization code.
-type AuthCode struct {
+// Code is one issued authorization code.
+type Code struct {
 	Code        string
 	SessionID   string
 	Label       string
@@ -59,17 +59,17 @@ type AuthCode struct {
 // already waiting.
 type CodeStore struct {
 	mu    sync.Mutex
-	codes map[string]*AuthCode
+	codes map[string]*Code
 	now   func() time.Time
 }
 
 // NewCodeStore returns an empty store.
 func NewCodeStore() *CodeStore {
-	return &CodeStore{codes: make(map[string]*AuthCode), now: time.Now}
+	return &CodeStore{codes: make(map[string]*Code), now: time.Now}
 }
 
 // Issue records a code and returns it.
-func (s *CodeStore) Issue(c *AuthCode) (string, error) {
+func (s *CodeStore) Issue(c *Code) (string, error) {
 	code, err := randomID(32)
 	if err != nil {
 		return "", err
@@ -91,7 +91,7 @@ func (s *CodeStore) Issue(c *AuthCode) (string, error) {
 // Every binding established at authorization time is re-checked here: the PKCE
 // challenge, the redirect URI, and the client. Skipping any of them turns the
 // code into a bearer credential that anyone who observes it can redeem.
-func (s *CodeStore) Consume(code, verifier, redirectURI, clientID string) (*AuthCode, error) {
+func (s *CodeStore) Consume(code, verifier, redirectURI, clientID string) (*Code, error) {
 	s.mu.Lock()
 	c, ok := s.codes[code]
 	if ok {
@@ -169,22 +169,21 @@ func ValidateRedirectURI(raw string) error {
 		// RFC 6749 §3.1.2: the endpoint URI must not include a fragment.
 		return errors.New("redirect_uri must not contain a fragment")
 	}
-	scheme := strings.ToLower(u.Scheme)
-	switch {
-	case scheme == "https":
+	switch scheme := strings.ToLower(u.Scheme); scheme {
+	case "https":
 		if u.Host == "" {
 			return errors.New("https redirect_uri has no host")
 		}
 		return nil
-	case scheme == "http":
+	case "http":
 		host := u.Hostname()
 		if host == "127.0.0.1" || host == "::1" || host == "localhost" {
 			return nil
 		}
 		return errors.New("http redirect_uri is only allowed for loopback")
-	case scheme == "":
+	case "":
 		return errors.New("redirect_uri must be absolute")
-	case scheme == "javascript" || scheme == "data" || scheme == "vbscript" || scheme == "file":
+	case "javascript", "data", "vbscript", "file":
 		return fmt.Errorf("redirect_uri scheme %q is not allowed", scheme)
 	default:
 		// Private-use URI scheme (RFC 8252 §7.1): must be reverse-DNS-ish, so

@@ -13,7 +13,29 @@ linters:
     - staticcheck
     - unconvert
     - unused
-issues:
-  exclude-rules:
-    - path: _test\.go
-      linters: [errcheck, noctx, bodyclose]
+  settings:
+    misspell:
+      # Nominet is the .uk registry, not a misspelling of "nominate". It appears
+      # in parser templates and their fixtures, so the checker would otherwise
+      # insist we rename a real company.
+      ignore-rules:
+        - Nominet
+        - nominet
+  # v2 spells this linters.exclusions.rules. It was issues.exclude-rules in v1,
+  # and this file declared version "2" while still using the v1 key — so
+  # `golangci-lint config verify` rejected it outright and the linter never ran.
+  exclusions:
+    rules:
+      # Tests deliberately ignore errors from helper calls whose failure would
+      # already fail the test, construct requests without a deadline, and leave
+      # response bodies to the test server's cleanup. They also do not need doc
+      # comments, and `func(w http.ResponseWriter, _ *http.Request)` is the
+      # idiomatic handler shape even when a parameter goes unused.
+      - path: _test\.go
+        linters: [errcheck, noctx, bodyclose, revive]
+      # internal/whois/whoistest is test scaffolding that happens not to live in
+      # a _test.go file, because several packages import it. It is a deliberately
+      # simple fake: it listens without a context and closes connections without
+      # inspecting the error, and both are correct for what it is.
+      - path: internal/whois/whoistest/
+        linters: [errcheck, noctx]

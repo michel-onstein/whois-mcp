@@ -42,7 +42,12 @@ jobs:
         with:
           go-version: '1.26'
           cache: true
-      - uses: golangci/golangci-lint-action@v6
+      # v8 rather than v6: .golangci.yml is version "2", and the v6 action
+      # installs golangci-lint 1.64.8, which can neither read a v2 config nor
+      # lint a module targeting a Go version newer than the one it was built
+      # with. Both failures present as "can't load config", so the version pair
+      # matters more than it looks.
+      - uses: golangci/golangci-lint-action@v8
         with:
           version: latest
 
@@ -99,7 +104,9 @@ jobs:
       - name: Start the stack
         working-directory: deploy/docker
         run: |
-          docker compose up -d --no-build --scale whois-mcp=1
+          # --no-build because the image was just built above; compose finds it
+          # by the explicit name both replicas share.
+          docker compose up -d --no-build
           # The image has no shell, so readiness is polled from here rather than
           # with a container HEALTHCHECK.
           for i in $(seq 1 60); do
@@ -112,6 +119,7 @@ jobs:
           echo "replicas did not become ready"; docker compose logs; exit 1
         env:
           VERSION: ci
+          WHOIS_MCP_IMAGE: whois-mcp:ci
 
       - name: End-to-end enrollment, lookup and cross-replica refresh
         run: ./scripts/e2e.sh
@@ -119,11 +127,15 @@ jobs:
       - name: Stack logs on failure
         if: failure()
         working-directory: deploy/docker
+        env:
+          WHOIS_MCP_IMAGE: whois-mcp:ci
         run: docker compose logs
 
       - name: Tear down
         if: always()
         working-directory: deploy/docker
+        env:
+          WHOIS_MCP_IMAGE: whois-mcp:ci
         run: docker compose down -v
 
   # The chart is verified by rendering it, not by deploying it: every check in

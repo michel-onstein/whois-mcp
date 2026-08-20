@@ -60,9 +60,19 @@ type authStack struct {
 // checkExposure, not here: this function's job is to build what it was asked
 // for, and the security gate is a single explicit check rather than a condition
 // scattered across the setup.
-func buildAuth(cfg config, ac authConfig, store cache.Cache, log *slog.Logger) (*authStack, error) {
+// sessions must be the store chosen by configuration, not one built here.
+// Building a store locally is exactly how the Redis session store ended up
+// implemented, tested, and never connected: WHOIS_MCP_SESSION_STORE=redis
+// created a RedisStore in buildStores that nothing referenced, so every replica
+// kept sessions in its own memory and a client that enrolled against one was
+// rejected by the next. The compose end-to-end run caught it; nothing
+// single-process could have.
+func buildAuth(cfg config, ac authConfig, store cache.Cache, sessions auth.SessionStore, log *slog.Logger) (*authStack, error) {
 	if ac.enrollmentToken == "" {
 		return nil, nil
+	}
+	if sessions == nil {
+		return nil, errors.New("a session store is required to enable authentication")
 	}
 
 	publicURL := ac.publicURL
@@ -85,7 +95,6 @@ func buildAuth(cfg config, ac authConfig, store cache.Cache, log *slog.Logger) (
 	}
 
 	issuer := auth.NewIssuer(keyring, publicURL, publicURL+auth.PathMCP)
-	sessions := auth.NewMemoryStore()
 	denylist := auth.NewDenylist(store)
 
 	enrollment, err := auth.NewEnrollment(ac.enrollmentToken, log)

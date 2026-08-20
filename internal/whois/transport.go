@@ -162,7 +162,7 @@ func (t *Transport) exchange(ctx context.Context, addr, query string) (*Response
 	if err != nil {
 		return nil, fmt.Errorf("dialing %s: %w", addr, err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	// Close the connection when the context ends. A deadline covers the common
 	// case, but a caller cancelling mid-read would otherwise wait for it.

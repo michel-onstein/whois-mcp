@@ -135,6 +135,7 @@ func NewMemoryStore() *MemoryStore {
 	}
 }
 
+// Create records a session in memory.
 func (m *MemoryStore) Create(_ context.Context, s *Session) error {
 	if s == nil || s.ID == "" {
 		return errors.New("session id is required")
@@ -144,11 +145,12 @@ func (m *MemoryStore) Create(_ context.Context, s *Session) error {
 	if _, exists := m.sessions[s.ID]; exists {
 		return fmt.Errorf("session %s already exists", s.ID)
 	}
-	copy := *s
-	m.sessions[s.ID] = &copy
+	snapshot := *s
+	m.sessions[s.ID] = &snapshot
 	return nil
 }
 
+// IssueRefresh records a session's first refresh token.
 func (m *MemoryStore) IssueRefresh(_ context.Context, sid, token string, now time.Time) error {
 	if token == "" {
 		return errors.New("refresh token is required")
@@ -170,6 +172,7 @@ func (m *MemoryStore) IssueRefresh(_ context.Context, sid, token string, now tim
 	return nil
 }
 
+// Get returns a copy of a session, so a caller cannot mutate stored state.
 func (m *MemoryStore) Get(_ context.Context, sid string) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -177,17 +180,18 @@ func (m *MemoryStore) Get(_ context.Context, sid string) (*Session, error) {
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrNoSession, sid)
 	}
-	copy := *s
-	return &copy, nil
+	snapshot := *s
+	return &snapshot, nil
 }
 
+// List returns copies of every session, newest first.
 func (m *MemoryStore) List(_ context.Context) ([]*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]*Session, 0, len(m.sessions))
 	for _, s := range m.sessions {
-		copy := *s
-		out = append(out, &copy)
+		snapshot := *s
+		out = append(out, &snapshot)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out, nil
@@ -237,10 +241,11 @@ func (m *MemoryStore) Rotate(_ context.Context, oldToken, newToken string, now t
 	s.Rotations++
 	m.refresh[newToken] = &refreshRecord{sid: s.ID, expiresAt: s.ExpiresAt}
 
-	copy := *s
-	return &copy, nil
+	snapshot := *s
+	return &snapshot, nil
 }
 
+// Revoke marks a session revoked and spends every refresh token in its family.
 func (m *MemoryStore) Revoke(_ context.Context, sid string, now time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -266,6 +271,7 @@ func (m *MemoryStore) revokeFamilyLocked(sid string, now time.Time) {
 	}
 }
 
+// Touch updates last-seen without extending the refresh window.
 func (m *MemoryStore) Touch(_ context.Context, sid string, now time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
