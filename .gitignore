@@ -1,0 +1,17 @@
+# Generated documentation artifacts — rebuild from docs/*.md, do not commit
+docs/*.pdf
+docs/*.html
+
+# Go build output
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+
+# Local environment
+.env
+.env.local
+
+# macOS
+.DS_Store
