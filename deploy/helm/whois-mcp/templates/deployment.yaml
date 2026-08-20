@@ -1,0 +1,153 @@
+{{- include "whois-mcp.validate" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "whois-mcp.fullname" . }}
+  labels:
+    {{- include "whois-mcp.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "whois-mcp.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "whois-mcp.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if not .Values.secrets.existingSecret }}
+        # Roll the pods when the chart-managed Secret changes. Without this a
+        # rotated enrollment token or signing key sits unused until something
+        # else happens to restart the pods.
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "whois-mcp.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: whois-mcp
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          env:
+            - name: WHOIS_MCP_LISTEN
+              value: ":{{ .Values.service.port }}"
+            # The canonical URI, and therefore the token audience.
+            - name: WHOIS_MCP_PUBLIC_URL
+              value: {{ .Values.publicURL | quote }}
+            - name: WHOIS_MCP_ENROLLMENT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "whois-mcp.secretName" . }}
+                  key: {{ .Values.secrets.enrollmentTokenKey }}
+            # Shared across replicas by construction: it comes from one Secret.
+            # A per-replica key would make every replica reject the others'
+            # tokens, which presents as random 401s.
+            - name: WHOIS_MCP_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "whois-mcp.secretName" . }}
+                  key: {{ .Values.secrets.signingKeyKey }}
+            - name: WHOIS_MCP_CACHE
+              value: {{ .Values.cache | quote }}
+            - name: WHOIS_MCP_SESSION_STORE
+              value: {{ .Values.sessionStore | quote }}
+            {{- if or (eq .Values.cache "redis") (eq .Values.sessionStore "redis") }}
+            - name: WHOIS_MCP_REDIS_URL
+              {{- if .Values.redis.existingSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.redis.existingSecret }}
+                  key: {{ .Values.redis.urlKey }}
+              {{- else }}
+              value: {{ .Values.redis.url | quote }}
+              {{- end }}
+            {{- end }}
+            {{- with .Values.otel.endpoint }}
+            - name: WHOIS_MCP_OTEL_ENDPOINT
+              value: {{ . | quote }}
+            {{- end }}
+            - name: WHOIS_MCP_LOG_LEVEL
+              value: {{ .Values.logLevel | quote }}
+            {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            # /readyz is gated on the bootstrap map being loaded and the cache
+            # backend answering, so a replica that cannot serve a refresh or
+            # honour a revocation leaves rotation instead of failing requests.
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          startupProbe:
+            # The first bootstrap fetch can take a moment. A startup probe means
+            # a slow start is not mistaken for a crash loop by the liveness
+            # probe, which would restart the pod before it ever became ready.
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 2
+            failureThreshold: 30
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          {{- if .Values.securityContext.readOnlyRootFilesystem }}
+          volumeMounts:
+            # The binary embeds its bootstrap snapshot and templates, so nothing
+            # needs writing — except that Go writes temporary files under TMPDIR
+            # in some paths, and a read-only root would fail those.
+            - name: tmp
+              mountPath: /tmp
+          {{- end }}
+      {{- if .Values.securityContext.readOnlyRootFilesystem }}
+      volumes:
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+      {{- end }}
+      # No persistent volumes anywhere: the request path is stateless and
+      # everything durable lives in Redis or is derived from IANA.
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

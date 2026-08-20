@@ -1,0 +1,30 @@
+apiVersion: v2
+name: whois-mcp
+description: |
+  MCP server answering domain registration questions over RDAP with a port-43
+  WHOIS fallback. Stateless request path: any replica can serve any request,
+  because access tokens are self-contained JWTs.
+type: application
+
+# version is the chart's own version; appVersion tracks the server.
+version: 0.1.0
+appVersion: "0.1.0"
+
+kubeVersion: ">=1.27.0-0"
+
+keywords:
+  - mcp
+  - whois
+  - rdap
+  - domains
+
+maintainers:
+  - name: whois-mcp maintainers
+    url: https://github.com/qjam/whois-mcp
+
+annotations:
+  # Called out here as well as in the NetworkPolicy template because it is the
+  # single most likely thing to be got wrong: a default-deny egress policy that
+  # allows 443 but not 43 breaks every ccTLD, and it presents as a parser bug
+  # rather than as a network fault.
+  whois-mcp/egress-requirements: "TCP 443 (RDAP, IANA) and TCP 43 (WHOIS)"
