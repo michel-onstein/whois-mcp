@@ -20,6 +20,7 @@ import (
 	"github.com/qjam/whois-mcp/internal/cache"
 	"github.com/qjam/whois-mcp/internal/mcpsrv"
 	"github.com/qjam/whois-mcp/internal/obs"
+	"github.com/qjam/whois-mcp/internal/ratelimit"
 	"github.com/qjam/whois-mcp/internal/rdapx"
 	"github.com/qjam/whois-mcp/internal/resolve"
 	"github.com/qjam/whois-mcp/internal/whois"
@@ -73,13 +74,21 @@ func run() error {
 	log.Info("bootstrap registry loaded from embedded snapshot",
 		"tlds", reg.Count(), "published", reg.Publication().Format(time.RFC3339))
 
+	// One upstream policy shared by both protocols, keyed by host: several TLDs
+	// resolve to the same registry endpoint, and separate policies per protocol
+	// would let two "polite" streams add up to one impolite one.
+	guard := ratelimit.NewGuard(
+		ratelimit.New(ratelimit.Options{}),
+		ratelimit.NewBreaker(ratelimit.BreakerOptions{}),
+	)
+
 	hc := rdapx.NewHTTPClient(rdapx.DefaultTimeout)
-	rc := rdapx.NewClient(reg, hc, rdapx.DefaultUserAgent(mcpsrv.Version))
+	rc := rdapx.NewClient(reg, hc, rdapx.DefaultUserAgent(mcpsrv.Version)).WithGuard(guard)
 
 	// One cache backs both protocols and the WHOIS host map; M3 swaps in Redis
 	// behind the same interface.
 	store := cache.NewMemory()
-	wc := whois.NewClient(whois.NewTransport(whois.DefaultTimeout), store, log)
+	wc := whois.NewClient(whois.NewTransport(whois.DefaultTimeout).WithGuard(guard), store, log)
 	res := resolve.New(rc, wc, store, log)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

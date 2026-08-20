@@ -36,6 +36,15 @@ func ianaFake(t *testing.T, host string) string {
 	}).Addr
 }
 
+// whoisServerFunc starts a fake registry whose body is produced per request, so
+// a test can count upstream calls or hold one open.
+func whoisServerFunc(t *testing.T, body func() string) string {
+	t.Helper()
+	return whoistest.NewHandler(t, func(string) (string, whoistest.Mode) {
+		return body(), whoistest.ModeNormal
+	}).Addr
+}
+
 // TestFallbackResolvesRDAPLessTLD is M1's headline exit criterion: a TLD with no
 // RDAP service must resolve, not report unknown.
 func TestFallbackResolvesRDAPLessTLD(t *testing.T) {

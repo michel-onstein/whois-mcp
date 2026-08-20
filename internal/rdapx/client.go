@@ -12,6 +12,7 @@ import (
 	"github.com/openrdap/rdap"
 
 	"github.com/qjam/whois-mcp/internal/normalize"
+	"github.com/qjam/whois-mcp/internal/ratelimit"
 )
 
 // ErrNoRDAPService means the TLD has no RDAP service in the bootstrap
@@ -46,6 +47,16 @@ type Client struct {
 	http            *http.Client
 	rc              *rdap.Client
 	followRegistrar bool
+	// guard is the per-upstream rate limit and circuit breaker. Nil means no
+	// policy, which is the right default for a unit test and the wrong one for
+	// production — cmd/whois-mcp always supplies it.
+	guard *ratelimit.Guard
+}
+
+// WithGuard attaches the upstream policy.
+func (c *Client) WithGuard(g *ratelimit.Guard) *Client {
+	c.guard = g
+	return c
 }
 
 // ClientOptions tunes the client.
@@ -118,7 +129,26 @@ func (c *Client) QueryWithOptions(ctx context.Context, q normalize.Query, opt Qu
 		res.Servers = append(res.Servers, base)
 
 		req := rdap.NewDomainRequest(q.ASCII).WithServer(u).WithContext(ctx)
-		resp, err := c.rc.Do(req)
+
+		var resp *rdap.Response
+		gerr := c.guard.Do(ctx, base, func(ctx context.Context) ratelimit.Outcome {
+			r, e := c.rc.Do(req)
+			resp = r
+			return ratelimit.Outcome{
+				Status:     statusOf(r),
+				RetryAfter: retryAfterOf(r),
+				Err:        e,
+			}
+		})
+		// A policy rejection — throttled, or the circuit is open — is not an
+		// answer about the domain. Record it and move to the next endpoint,
+		// because another of this registry's base URLs may be healthy.
+		if isPolicyRejection(gerr) {
+			res.Warnings = append(res.Warnings, truncate(gerr.Error(), 200))
+			lastErr = gerr
+			continue
+		}
+		err = gerr
 
 		// Capture the raw body and the actual URL, whatever the outcome.
 		if resp != nil && len(resp.HTTP) > 0 {
@@ -302,4 +332,45 @@ func registrarLink(d *rdap.Domain) string {
 		}
 	}
 	return ""
+}
+
+// statusOf recovers the HTTP status from an RDAP response, or 0 if the exchange
+// never got that far.
+func statusOf(resp *rdap.Response) int {
+	if resp == nil || len(resp.HTTP) == 0 {
+		return 0
+	}
+	last := resp.HTTP[len(resp.HTTP)-1]
+	if last == nil || last.Response == nil {
+		return 0
+	}
+	return last.Response.StatusCode
+}
+
+// retryAfterOf recovers a Retry-After header, which is the only thing that lets
+// us honour a registry's own pacing instruction rather than guessing.
+func retryAfterOf(resp *rdap.Response) string {
+	if resp == nil || len(resp.HTTP) == 0 {
+		return ""
+	}
+	last := resp.HTTP[len(resp.HTTP)-1]
+	if last == nil || last.Response == nil {
+		return ""
+	}
+	return last.Response.Header.Get("Retry-After")
+}
+
+// isPolicyRejection reports whether an error came from our own upstream policy
+// rather than from the registry.
+//
+// The distinction matters at the call site: a policy rejection says nothing
+// about the domain, so it must not be classified as "does not exist", and it
+// should not stop us trying this registry's other endpoints.
+func isPolicyRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	var throttled *ratelimit.ErrThrottled
+	return ratelimit.IsOpen(err) || errors.As(err, &throttled) ||
+		errors.Is(err, ratelimit.ErrWouldExceedDeadline)
 }

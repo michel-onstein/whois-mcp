@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"github.com/qjam/whois-mcp/internal/cache"
 	"github.com/qjam/whois-mcp/internal/normalize"
@@ -14,9 +17,8 @@ import (
 	"github.com/qjam/whois-mcp/internal/whois/parsers"
 )
 
-// TTLs for cached results. Registration data changes slowly; availability is
-// the volatile case; an ambiguous answer is retried soon rather than cemented.
-// See docs/MCP_DESIGN.md §9.
+// TTLs for cached results, kept as names because they read better at call
+// sites. The authoritative table is DefaultTTLPolicy in ttl.go.
 const (
 	TTLRegistered   = time.Hour
 	TTLUnregistered = 5 * time.Minute
@@ -44,13 +46,45 @@ type Resolver struct {
 	cache cache.Cache
 	log   *slog.Logger
 	now   func() time.Time
+
+	// flight collapses concurrent identical lookups into one upstream call.
+	//
+	// This matters more than it sounds: an agent screening a list of candidate
+	// names routinely repeats entries, and domain_availability fans out fifty
+	// at once. Without collapsing, duplicates in one batch become duplicate
+	// queries to the same registry within the same second — which is precisely
+	// the pattern that reads as a scrape.
+	flight singleflight.Group
+
+	// policy is the cache TTL table (design §9).
+	policy TTLPolicy
 }
 
 // New returns a Resolver. A nil WHOIS client disables the fallback, which
 // leaves RDAP-less TLDs answering Unknown — the M0 behaviour, retained only so
 // a caller that genuinely wants RDAP-only can have it.
 func New(rc *rdapx.Client, wc *whois.Client, c cache.Cache, log *slog.Logger) *Resolver {
-	return &Resolver{rdap: rc, whois: wc, cache: c, log: log, now: time.Now}
+	return &Resolver{
+		rdap: rc, whois: wc, cache: c, log: log,
+		now:    time.Now,
+		policy: DefaultTTLPolicy,
+	}
+}
+
+// WithTTLPolicy overrides the cache TTL table.
+//
+// An invalid or out-of-order policy is refused rather than applied: a policy
+// that cached "unknown" longer than "registered" would pin transient failures
+// as answers, and nothing downstream would notice.
+func (r *Resolver) WithTTLPolicy(p TTLPolicy) error {
+	if !p.Valid() {
+		return errors.New("TTL policy has a non-positive entry; that would disable caching, which is what gets an anonymous client blocked")
+	}
+	if !p.Ordered() {
+		return errors.New("TTL policy caches an ambiguous answer for longer than a certain one")
+	}
+	r.policy = p
+	return nil
 }
 
 // Lookup normalizes the input, consults the cache, and queries RDAP, falling
@@ -71,6 +105,51 @@ func (r *Resolver) Lookup(ctx context.Context, input string, opt Options) (*norm
 		return nil, err
 	}
 
+	// Collapse concurrent identical lookups. The key includes the options that
+	// change the answer, so a caller asking for a fresh fetch is not handed a
+	// cached one that another caller was content with.
+	key := flightKey(q.ASCII, opt)
+	v, err, _ := r.flight.Do(key, func() (any, error) {
+		return r.lookupOnce(ctx, input, opt)
+	})
+	if err != nil {
+		return nil, err
+	}
+	rep, ok := v.(*normalize.DomainReport)
+	if !ok || rep == nil {
+		return nil, fmt.Errorf("internal: lookup produced %T", v)
+	}
+	// Each caller gets its own copy, and per-caller filtering happens here and
+	// nowhere else. Filtering inside lookupOnce would apply the *winning*
+	// caller's options to the shared report, so a caller that asked for
+	// include_contacts=false would silently strip the entities every other
+	// collapsed caller had asked for.
+	clone := *rep
+	r.applyOptions(&clone, opt)
+	return &clone, nil
+}
+
+// flightKey identifies lookups that may share one upstream call.
+func flightKey(ascii string, opt Options) string {
+	// MaxAge participates because a zero MaxAge forces a fresh fetch; folding
+	// it in with a cached-result caller would defeat that.
+	fresh := "c"
+	if opt.MaxAge <= 0 {
+		fresh = "f"
+	}
+	skip := "r"
+	if opt.SkipRegistrarReferral {
+		skip = "n"
+	}
+	return ascii + "|" + fresh + "|" + skip
+}
+
+func (r *Resolver) lookupOnce(ctx context.Context, input string, opt Options) (*normalize.DomainReport, error) {
+	q, err := NormalizeQuery(input)
+	if err != nil {
+		return nil, err
+	}
+
 	key := cacheKey(q.ASCII)
 	if opt.MaxAge > 0 {
 		if raw, ok := r.cache.Get(ctx, key); ok {
@@ -78,7 +157,6 @@ func (r *Resolver) Lookup(ctx context.Context, input string, opt Options) (*norm
 			if err := json.Unmarshal(raw, &rep); err == nil {
 				if age := r.now().Sub(rep.Source.FetchedAt); age <= opt.MaxAge {
 					rep.Source.Cache = "hit"
-					r.applyOptions(&rep, opt)
 					return &rep, nil
 				}
 			}
@@ -94,7 +172,6 @@ func (r *Resolver) Lookup(ctx context.Context, input string, opt Options) (*norm
 		rep := r.viaWHOIS(ctx, q, fetchedAt,
 			"TLD ."+q.TLD+" publishes no RDAP service")
 		r.store(ctx, key, rep)
-		r.applyOptions(rep, opt)
 		return rep, nil
 	case err != nil:
 		// Context cancellation and hard transport failures reach here.
@@ -127,13 +204,11 @@ func (r *Resolver) Lookup(ctx context.Context, input string, opt Options) (*norm
 		if alt := r.viaWHOIS(ctx, q, fetchedAt, "RDAP returned no definite answer"); alt.Registered != normalize.Unknown {
 			alt.Warnings = append(alt.Warnings, rep.Warnings...)
 			r.store(ctx, key, alt)
-			r.applyOptions(alt, opt)
 			return alt, nil
 		}
 	}
 
 	r.store(ctx, key, rep)
-	r.applyOptions(rep, opt)
 	return rep, nil
 }
 
@@ -195,6 +270,11 @@ func tristate(a parsers.Availability) normalize.Tristate {
 	}
 }
 
+// applyOptions trims a report to what this caller asked for.
+//
+// It is called only on a per-caller copy, never on the report that goes into the
+// cache: caching a filtered report would serve the next caller data that was
+// removed for someone else's benefit.
 func (r *Resolver) applyOptions(rep *normalize.DomainReport, opt Options) {
 	if !opt.IncludeContacts {
 		rep.Entities = nil
@@ -203,15 +283,7 @@ func (r *Resolver) applyOptions(rep *normalize.DomainReport, opt Options) {
 
 // store caches a report under the TTL appropriate to its certainty.
 func (r *Resolver) store(ctx context.Context, key string, rep *normalize.DomainReport) {
-	var ttl time.Duration
-	switch rep.Registered {
-	case normalize.Yes:
-		ttl = TTLRegistered
-	case normalize.No:
-		ttl = TTLUnregistered
-	default:
-		ttl = TTLUnknown
-	}
+	ttl := r.policy.For(rep.Registered)
 	raw, err := json.Marshal(rep)
 	if err != nil {
 		r.log.Warn("caching report failed", "error", err)

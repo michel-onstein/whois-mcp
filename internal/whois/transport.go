@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/qjam/whois-mcp/internal/netguard"
+	"github.com/qjam/whois-mcp/internal/ratelimit"
 )
 
 // MaxResponseBytes caps a single port-43 response. Real WHOIS records are a few
@@ -87,6 +88,15 @@ type Transport struct {
 	dialer   *net.Dialer
 	timeout  time.Duration
 	maxBytes int64
+	// guard is the per-host rate limit and circuit breaker. Nil means no
+	// policy, which suits a unit test; cmd/whois-mcp always supplies one.
+	guard *ratelimit.Guard
+}
+
+// WithGuard attaches the upstream policy.
+func (t *Transport) WithGuard(g *ratelimit.Guard) *Transport {
+	t.guard = g
+	return t
 }
 
 // NewTransport returns a Transport with the SSRF guard in place.
@@ -129,6 +139,24 @@ func (t *Transport) Query(ctx context.Context, host, query string) (*Response, e
 	ctx, cancel := context.WithTimeout(ctx, t.timeout)
 	defer cancel()
 
+	// Port 43 has no status codes and no Retry-After, so the guard sees only
+	// "worked" or "did not". That is enough: a registry that stops answering is
+	// exactly what the breaker is for, and several ccTLD registries enforce
+	// aggressive per-IP limits by simply refusing connections.
+	var resp *Response
+	err = t.guard.Do(ctx, addr, func(ctx context.Context) ratelimit.Outcome {
+		r, e := t.exchange(ctx, addr, query)
+		resp = r
+		return ratelimit.Outcome{Err: e}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// exchange performs one port-43 conversation, without policy.
+func (t *Transport) exchange(ctx context.Context, addr, query string) (*Response, error) {
 	started := time.Now()
 	conn, err := t.dialer.DialContext(ctx, "tcp", addr)
 	if err != nil {
