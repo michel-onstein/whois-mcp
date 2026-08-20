@@ -85,6 +85,20 @@ func NewClientWithOptions(reg *Registry, hc *http.Client, userAgent string, opt 
 // back as a Result with the appropriate tri-state, because those are answers,
 // not failures.
 func (c *Client) Query(ctx context.Context, q normalize.Query) (*Result, error) {
+	return c.QueryWithOptions(ctx, q, QueryOptions{})
+}
+
+// QueryOptions tunes a single query.
+type QueryOptions struct {
+	// SkipRegistrarReferral suppresses the registrar hop for this call even
+	// when the client has following enabled. The availability path uses it:
+	// "is this domain free" is answered by the registry alone, and paying for
+	// a referral to learn contact data nobody asked for is waste.
+	SkipRegistrarReferral bool
+}
+
+// QueryWithOptions is Query with per-call behaviour.
+func (c *Client) QueryWithOptions(ctx context.Context, q normalize.Query, opt QueryOptions) (*Result, error) {
 	bases, ok := c.reg.Lookup(q.TLD)
 	if !ok {
 		return nil, fmt.Errorf("%w: %q", ErrNoRDAPService, q.TLD)
@@ -128,7 +142,7 @@ func (c *Client) Query(ctx context.Context, q normalize.Query) (*Result, error) 
 			}
 			res.Domain = dom
 			res.Registered = normalize.Yes
-			if c.followRegistrar {
+			if c.followRegistrar && !opt.SkipRegistrarReferral {
 				c.followRegistrarHop(ctx, res)
 			}
 			return res, nil

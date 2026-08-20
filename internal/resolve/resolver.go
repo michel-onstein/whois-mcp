@@ -32,6 +32,9 @@ type Options struct {
 	// usually redacted, but their presence and redaction state is itself
 	// information.
 	IncludeContacts bool
+	// SkipRegistrarReferral suppresses the registry-to-registrar hop. The
+	// availability path sets it: the registry alone answers "is this taken".
+	SkipRegistrarReferral bool
 }
 
 // Resolver executes lookups. It is safe for concurrent use.
@@ -83,7 +86,9 @@ func (r *Resolver) Lookup(ctx context.Context, input string, opt Options) (*norm
 	}
 
 	fetchedAt := r.now().UTC()
-	res, err := r.rdap.Query(ctx, q)
+	res, err := r.rdap.QueryWithOptions(ctx, q, rdapx.QueryOptions{
+		SkipRegistrarReferral: opt.SkipRegistrarReferral,
+	})
 	switch {
 	case errors.Is(err, rdapx.ErrNoRDAPService):
 		rep := r.viaWHOIS(ctx, q, fetchedAt,

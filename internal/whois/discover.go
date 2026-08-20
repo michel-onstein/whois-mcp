@@ -57,6 +57,14 @@ var seedHosts = map[string]string{
 	"eu":   "whois.eu",
 }
 
+// SeedHost returns the embedded WHOIS host for a TLD, or "" if there is none.
+//
+// It answers without any network access, which is what makes it usable from
+// tld_info: describing coverage must not itself cost a round trip to IANA.
+func SeedHost(tld string) string {
+	return seedHosts[normalizeTLD(tld)]
+}
+
 // Discoverer resolves a TLD to its authoritative WHOIS host.
 //
 // Answers are cached for HostTTL through the shared Cache, so the Redis
