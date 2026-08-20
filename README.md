@@ -7,7 +7,7 @@ over RDAP, with a WHOIS fallback for the ccTLDs that publish no RDAP service.
 - Design: [`docs/MCP_DESIGN.md`](docs/MCP_DESIGN.md)
 - Build order: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)
 
-## Status: M3
+## Status: M4
 
 **Any TLD resolves.** RDAP covers the gTLDs (~1,200 TLDs); the port-43 WHOIS
 fallback covers the ccTLDs that publish no RDAP service, and also rescues a
@@ -59,7 +59,32 @@ unauthenticated instance reachable from a network is an open proxy that queries
 registries from your egress IP, and the resulting block presents as a total
 outage for the affected TLD.
 
-Not yet implemented: Helm (M4).
+Not yet implemented: M5 (`ip_lookup` / ASN lookups via the RIRs), which the plan
+marks explicitly deferrable.
+
+## Kubernetes
+
+```bash
+helm install whois-mcp deploy/helm/whois-mcp \
+  --set publicURL=https://whois.example \
+  --set ingress.host=whois.example \
+  --set secrets.existingSecret=whois-mcp-secrets \
+  --set redis.url=redis://redis:6379/0
+```
+
+Two replicas, no persistent volumes, `/healthz` and `/readyz` probes, HPA, PDB,
+and a NetworkPolicy. The chart **refuses to render** configurations that would
+deploy cleanly and then misbehave — a cleartext or trailing-slash `publicURL`
+(it is the token audience), several replicas with per-replica sessions, or a
+NetworkPolicy without egress on **port 43**. That last one is worth repeating:
+without port 43 every ccTLD that publishes no RDAP service becomes unresolvable,
+and the symptom reads like a parser bug rather than a firewall rule.
+
+The signing key comes from a single Secret, so replicas necessarily share it. A
+per-replica key makes each replica reject the others' tokens, which surfaces as
+random 401s. To rotate it, see
+[`RUNBOOK_KEY_ROTATION.md`](deploy/helm/whois-mcp/RUNBOOK_KEY_ROTATION.md) —
+publish, wait one access-token lifetime, then retire.
 
 ## Running in a container
 
