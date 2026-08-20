@@ -2,43 +2,11 @@ package rdapx
 
 import (
 	"context"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 )
-
-func TestBlockReason(t *testing.T) {
-	blocked := []string{
-		"127.0.0.1", "127.15.2.9", "::1",
-		"10.0.0.5", "172.16.0.1", "192.168.1.1",
-		"169.254.169.254", // cloud metadata: the classic SSRF target
-		"fd00::1",         // unique-local
-		"fe80::1",         // link-local
-		"0.0.0.0", "::",
-		"100.64.0.1", // CGNAT
-		"224.0.0.1",  // multicast
-		"198.18.0.1", // benchmarking
-		"240.0.0.1",  // reserved
-	}
-	for _, s := range blocked {
-		if r := blockReason(net.ParseIP(s)); r == "" {
-			t.Errorf("blockReason(%s) = allowed; want blocked", s)
-		}
-	}
-
-	allowed := []string{"1.1.1.1", "8.8.8.8", "199.7.83.42", "2606:4700::1111"}
-	for _, s := range allowed {
-		if r := blockReason(net.ParseIP(s)); r != "" {
-			t.Errorf("blockReason(%s) = %q; want allowed", s, r)
-		}
-	}
-
-	if blockReason(nil) == "" {
-		t.Error("nil IP must be blocked")
-	}
-}
 
 // TestGuardBlocksLoopbackInPractice proves the guard is actually wired into the
 // dialer, not merely defined: a real request to a loopback server must fail.

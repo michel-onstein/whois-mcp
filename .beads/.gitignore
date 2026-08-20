@@ -5,8 +5,10 @@
 *.db-wal
 
 # fsqlite namespace gate/use sidecars (per-machine runtime state). The
-# `-fsqlite-ns-*` suffix slips past the generic `*.db-*` globs above, same as #271.
-*.db-fsqlite-ns-*
+# `-fsqlite-ns-*` suffix slips past the generic `*.db-*` globs above, same as
+# #271. Matched without a `.db` prefix because vacuum writes them against a
+# temp name too (.beads.vacuum.<pid>.tmp-fsqlite-ns-gate).
+*-fsqlite-ns-*
 
 # Lock files
 *.lock
