@@ -92,6 +92,13 @@ func NewIssuer(keys *Keyring, issuerURL, audienceURI string) *Issuer {
 // Issuer returns the canonical issuer URL.
 func (i *Issuer) IssuerURL() string { return i.issuer }
 
+// Keyring returns the keys this issuer signs and verifies with.
+//
+// Exported so a test in another package can mint a token with the *same* key
+// but a different audience: that is the confused-deputy case, and a test that
+// used a different key would only be re-testing the signature check.
+func (i *Issuer) Keyring() *Keyring { return i.keys }
+
 // Audience returns the canonical resource URI tokens are minted for.
 func (i *Issuer) Audience() string { return i.audience }
 
