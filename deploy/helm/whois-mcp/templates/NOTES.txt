@@ -1,0 +1,75 @@
+whois-mcp {{ .Chart.AppVersion }} installed as {{ .Release.Name }}.
+
+  Endpoint:  {{ .Values.publicURL }}/mcp
+  Replicas:  {{ if .Values.autoscaling.enabled }}{{ .Values.autoscaling.minReplicas }}-{{ .Values.autoscaling.maxReplicas }} (HPA){{ else }}{{ .Values.replicaCount }}{{ end }}
+  Cache:     {{ .Values.cache }}
+  Sessions:  {{ .Values.sessionStore }}
+
+ENROLLING A CLIENT
+
+Nothing works until a client enrolls. The enrollment token is not a request
+credential — it is used once, in a browser, and exchanged for tokens scoped to a
+single named session that can be revoked on its own.
+
+  1. Point your MCP client at {{ .Values.publicURL }}/mcp
+  2. It gets a 401 and discovers the authorization server automatically.
+  3. It opens a browser at {{ .Values.publicURL }}/oauth/authorize
+  4. Paste the enrollment token and name the session.
+
+To read the token you deployed with:
+
+  kubectl -n {{ .Release.Namespace }} get secret {{ include "whois-mcp.secretName" . }} \
+    -o jsonpath='{.data.{{ .Values.secrets.enrollmentTokenKey }}}' | base64 -d; echo
+
+Give each client its own session by enrolling each one separately. That is what
+makes "cut off that one client" answerable later:
+
+  session_list     (needs the whois:admin scope)
+  session_revoke   (needs the whois:admin scope)
+
+SCOPES
+
+  whois:read   lookups                              (advertised, granted by default)
+  whois:raw    unredacted raw RDAP and WHOIS text    (step-up)
+  whois:admin  list and revoke sessions             (step-up)
+
+Only whois:read is advertised in the metadata. A client that never asks for more
+never holds a credential that can dump contact data.
+
+{{ if .Values.ingress.enabled }}
+CHECKING IT
+
+  curl -fsS {{ .Values.publicURL }}/readyz
+  curl -fsS {{ .Values.publicURL }}/.well-known/oauth-protected-resource
+{{- else }}
+CHECKING IT (no ingress; port-forward)
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "whois-mcp.fullname" . }} 8080:{{ .Values.service.port }}
+  curl -fsS http://localhost:8080/readyz
+{{- end }}
+
+{{ if not .Values.networkPolicy.enabled }}
+WARNING: networkPolicy is disabled. If your cluster has a default-deny egress
+policy, make sure TCP 43 is permitted as well as 443. Without port 43 every
+ccTLD that publishes no RDAP service becomes unresolvable, and the symptom looks
+like a parser bug rather than a firewall rule.
+{{- end }}
+
+{{ if and (gt (int (default .Values.replicaCount .Values.autoscaling.minReplicas)) 1) (ne .Values.sessionStore "redis") }}
+WARNING: more than one replica with a non-shared session store. A client that
+enrolls against one replica will be logged out by the next request the load
+balancer sends elsewhere.
+{{- end }}
+
+{{ if not .Values.secrets.existingSecret }}
+NOTE: the enrollment token and signing key were rendered from your values, so
+they are in this release's stored manifest. For anything beyond a test cluster,
+manage them with sealed-secrets or external-secrets and set
+secrets.existingSecret instead.
+{{- end }}
+
+ROTATING THE SIGNING KEY
+
+See deploy/helm/whois-mcp/RUNBOOK_KEY_ROTATION.md. The short version: publish the
+new key alongside the old, wait one access-token lifetime (10 minutes), then
+retire the old one. Retiring it early invalidates tokens that are still valid.

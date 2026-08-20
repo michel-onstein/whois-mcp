@@ -1,0 +1,68 @@
+{{- if .Values.autoscaling.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "whois-mcp.fullname" . }}
+  labels:
+    {{- include "whois-mcp.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "whois-mcp.fullname" . }}
+  minReplicas: {{ .Values.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.autoscaling.maxReplicas }}
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+    {{- if .Values.autoscaling.inFlightRequests.enabled }}
+    # In-flight requests is the better signal for this server: most of a
+    # request's life is spent waiting on a registry, so CPU stays low while
+    # concurrency — and therefore latency — climbs. It needs a metrics adapter
+    # exposing the series, which is why it is opt-in: an HPA referencing a
+    # metric nothing provides does not scale, it reports an error indefinitely.
+    - type: Pods
+      pods:
+        metric:
+          name: {{ .Values.autoscaling.inFlightRequests.metricName }}
+        target:
+          type: AverageValue
+          averageValue: {{ .Values.autoscaling.inFlightRequests.targetAverageValue | quote }}
+    {{- end }}
+  behavior:
+    scaleDown:
+      # Slow to scale down. Shedding a replica drops its in-process cache, and
+      # cache hit rate is what keeps query volume off registry radar, so
+      # flapping replicas cost upstream requests rather than just CPU.
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+{{- end }}
+---
+{{- if .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "whois-mcp.fullname" . }}
+  labels:
+    {{- include "whois-mcp.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "whois-mcp.selectorLabels" . | nindent 6 }}
+{{- end }}

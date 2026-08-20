@@ -1,0 +1,73 @@
+{{- if .Values.networkPolicy.enabled }}
+# The single highest-value manifest in this chart.
+#
+# A default-deny egress policy that allows 443 but not 43 breaks every ccTLD
+# that publishes no RDAP service — which is most of them. The symptom is
+# "registered: unknown" with warnings about unreachable hosts, so it reads like
+# a parser bug and gets investigated in the wrong place for a day. The chart
+# refuses to render if 43 is missing from egressPorts, so dropping WHOIS support
+# has to be a deliberate, visible choice.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "whois-mcp.fullname" . }}
+  labels:
+    {{- include "whois-mcp.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "whois-mcp.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Only the service port, from anywhere in the cluster: the ingress
+    # controller is what terminates outside traffic, and it may live in any
+    # namespace depending on the distribution.
+    - ports:
+        - protocol: TCP
+          port: {{ .Values.service.port }}
+  egress:
+    # DNS first: without it, every registry hostname fails to resolve and the
+    # symptom is identical to the registries being down.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        {{- range .Values.networkPolicy.dnsPorts }}
+        - protocol: UDP
+          port: {{ . }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    # Registry egress. RDAP is 443; WHOIS is 43.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              # The server's own SSRF guard already refuses these, but a policy
+              # is defence that does not depend on application code being
+              # correct: a referral pointing at cluster-internal services or a
+              # cloud metadata endpoint cannot even leave the pod.
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16
+              - 127.0.0.0/8
+      ports:
+        {{- range .Values.networkPolicy.egressPorts }}
+        - protocol: TCP
+          port: {{ . }}
+        {{- end }}
+    {{- if or (eq .Values.cache "redis") (eq .Values.sessionStore "redis") }}
+    # In-cluster Redis. A managed Redis outside the cluster needs an
+    # extraEgress entry, because the ipBlock above excludes private ranges.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 6379
+    {{- end }}
+    {{- with .Values.networkPolicy.extraEgress }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}

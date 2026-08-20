@@ -125,3 +125,17 @@ jobs:
         if: always()
         working-directory: deploy/docker
         run: docker compose down -v
+
+  # The chart is verified by rendering it, not by deploying it: every check in
+  # helm-verify.sh is either "this renders" or "this configuration is refused",
+  # and the refusals are the valuable half — each one is a deployment that would
+  # come up healthy and then behave inexplicably.
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: latest
+      - name: Verify the chart
+        run: ./scripts/helm-verify.sh
