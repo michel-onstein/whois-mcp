@@ -54,12 +54,29 @@ type Client struct {
 	log *slog.Logger
 }
 
+// ClientOptions tunes the client.
+type ClientOptions struct {
+	// IANAHost overrides the server asked about TLDs. Exists so a deployment
+	// with constrained egress can point at a mirror, and so tests can supply a
+	// fake without reaching the network.
+	IANAHost string
+}
+
 // NewClient returns a Client. A nil logger discards.
 func NewClient(tr *Transport, c cache.Cache, log *slog.Logger) *Client {
+	return NewClientWithOptions(tr, c, log, ClientOptions{})
+}
+
+// NewClientWithOptions is NewClient with the IANA host configurable.
+func NewClientWithOptions(tr *Transport, c cache.Cache, log *slog.Logger, opt ClientOptions) *Client {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Client{tr: tr, dis: NewDiscoverer(tr, c), log: log}
+	d := NewDiscoverer(tr, c)
+	if opt.IANAHost != "" {
+		d.ianaHost = opt.IANAHost
+	}
+	return &Client{tr: tr, dis: d, log: log}
 }
 
 // Query resolves a domain over WHOIS.
