@@ -355,7 +355,12 @@ registry flakiness never fails a merge.
 
 None of these block starting Phase 0.
 
-1. **Container registry and image naming** — before M3 delivery.
+1. ~~**Container registry and image naming** — before M3 delivery.~~ **Settled:**
+   GHCR, in the repository's own namespace — `ghcr.io/<owner>/<repo>`, taken from
+   `github.repository` so a transfer or rename follows automatically. Tags:
+   `latest` and `sha-<commit>` on `main`, `X.Y.Z` and `X.Y` on a `v*` tag. The
+   image is attached to the repository by `org.opencontainers.image.source`,
+   asserted in CI.
 2. **Target cluster, namespace, and ingress hostname** — before M4. The hostname
    is also the OAuth canonical URI and therefore the `aud` value, so it should be
    settled before M2's end-to-end testing rather than during M4.

@@ -76,6 +76,30 @@ request. IANA's bootstrap file does not carve those ranges out of the RIR
 allocations it lists, so a lookup for `192.168.1.1` would otherwise spend a
 request on a third party to learn nothing.
 
+## Container image
+
+CI publishes to GHCR in this repository's own namespace, on every push to `main`
+and on every `v*` tag:
+
+```bash
+docker pull ghcr.io/michel-onstein/whois-mcp:latest      # newest main
+docker pull ghcr.io/michel-onstein/whois-mcp:sha-1a2b3c4 # a specific commit
+docker pull ghcr.io/michel-onstein/whois-mcp:0.1.0       # a release tag
+```
+
+`linux/amd64` and `linux/arm64`, built by cross-compiling rather than emulating —
+the binary is CGO-free, so the toolchain runs natively and the arm64 image costs
+nothing extra to produce.
+
+The image carries `org.opencontainers.image.source`, which is what attaches the
+package to this repository: it inherits the repository's visibility and access,
+and it links back from the package page. CI asserts that label on every PR, since
+a wrong value publishes a package owned by nothing.
+
+Releases are cut by tagging: `git tag v0.1.0 && git push origin v0.1.0` publishes
+`:0.1.0`, `:0.1` and `:latest`. The Helm chart's `image.tag` defaults to the
+chart's `appVersion`, so a default `helm install` expects that tag to exist.
+
 ## Kubernetes
 
 ```bash

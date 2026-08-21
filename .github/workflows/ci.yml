@@ -3,6 +3,10 @@ name: ci
 on:
   push:
     branches: [main]
+    # Release tags publish a semver image. The chart's image.tag defaults to its
+    # appVersion, so without a matching vX.Y.Z tag pushed here a default
+    # `helm install` resolves to an image that was never published.
+    tags: ['v*']
   pull_request:
 
 permissions:
@@ -89,10 +93,29 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Build image
-        run: docker build -t whois-mcp:ci --build-arg VERSION=ci-${GITHUB_SHA::7} .
+        run: |
+          docker build -t whois-mcp:ci \
+            --build-arg VERSION=ci-${GITHUB_SHA::7} \
+            --build-arg REVISION=${GITHUB_SHA} \
+            --build-arg SOURCE=https://github.com/${GITHUB_REPOSITORY} .
 
       - name: Report image size
         run: docker images whois-mcp:ci --format '{{.Repository}}:{{.Tag}} {{.Size}}'
+
+      # Checked here, on every PR, rather than only at publish time: GHCR ties a
+      # package to a repository by this label, and a wrong one yields a package
+      # that looks published but inherits none of the repository's permissions
+      # and shows up owned by nothing.
+      - name: The image is tied to this repository
+        run: |
+          want="https://github.com/${GITHUB_REPOSITORY}"
+          got="$(docker inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' whois-mcp:ci)"
+          if [ "$got" != "$want" ]; then
+            echo "org.opencontainers.image.source is '$got', want '$want'"
+            exit 1
+          fi
+          echo "source: $got"
+          docker inspect --format '{{index .Config.Labels "org.opencontainers.image.version"}}' whois-mcp:ci
 
       - name: Generate secrets
         run: |
@@ -151,3 +174,78 @@ jobs:
           version: latest
       - name: Verify the chart
         run: ./scripts/helm-verify.sh
+
+  # Publish to GHCR, in the repository's own namespace: ghcr.io/<owner>/<repo>,
+  # taken from github.repository so a transferred or renamed repository keeps
+  # publishing to the matching package rather than to a stale hard-coded name.
+  #
+  # Gated on every other job, and on this being a push rather than a
+  # pull_request: a fork's PR must never be able to publish, and a PR's ephemeral
+  # merge commit is not something anyone should be able to pull.
+  publish:
+    needs: [test, lint, redis, image, helm]
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # The one job that gets write access to anything. Declared here rather
+      # than at the workflow level so no other job inherits it.
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # No setup-qemu-action: the Dockerfile's builder stage runs natively and
+      # cross-compiles, so nothing is emulated.
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Version string
+        id: version
+        run: |
+          # A tag publishes its own name; a main push publishes the short SHA,
+          # which is what the sha- image tag resolves to as well.
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            echo "value=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=sha
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          # linux/arm64 is not optional in practice: Apple Silicon is where this
+          # gets run by hand, and an amd64-only image runs there only under
+          # emulation.
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ steps.version.outputs.value }}
+            REVISION=${{ github.sha }}
+            SOURCE=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Report what was published
+        run: |
+          echo "### Published" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
