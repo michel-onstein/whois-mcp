@@ -1,9 +1,17 @@
 # Values for whois-mcp. See design §11.3.
 
 image:
-  repository: ghcr.io/qjam/whois-mcp
+  # Where CI publishes: ghcr.io/<owner>/<repo> for this repository. GHCR ties the
+  # package to the repository by the image's org.opencontainers.image.source
+  # label, so this and that label name the same place.
+  repository: ghcr.io/michel-onstein/whois-mcp
   # Empty means the chart's appVersion, so a `helm upgrade` after a version bump
   # does not silently keep the old image.
+  #
+  # That requires a matching release tag to have been pushed: appVersion 0.1.0
+  # resolves to the :0.1.0 image, which exists only once `v0.1.0` is tagged. Off
+  # a release, set this to `latest` or a `sha-<commit>` tag from a main build —
+  # otherwise the pods sit in ImagePullBackOff for a tag that was never built.
   tag: ""
   pullPolicy: IfNotPresent
 imagePullSecrets: []
