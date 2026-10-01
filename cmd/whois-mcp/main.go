@@ -213,7 +213,7 @@ func run(lf *listenFlags) error {
 	// replica that cannot is taken out of rotation rather than left to fail
 	// requests: the bootstrap map, the cache backend, and — per plan task 3.1 —
 	// the assertion that we are not serving unauthenticated off-host.
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
 		if reg.Count() == 0 {
 			http.Error(w, "not ready: bootstrap registry empty", http.StatusServiceUnavailable)
 			return
