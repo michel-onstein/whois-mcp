@@ -19,6 +19,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
+	"github.com/qjam/whois-mcp/internal/auth"
+	"github.com/qjam/whois-mcp/internal/cache"
 	"github.com/qjam/whois-mcp/internal/mcpsrv"
 	"github.com/qjam/whois-mcp/internal/obs"
 	"github.com/qjam/whois-mcp/internal/ratelimit"
@@ -129,14 +131,13 @@ func run(lf *listenFlags) error {
 	hc := rdapx.NewHTTPClient(rdapx.DefaultTimeout)
 	rc := rdapx.NewClient(reg, hc, rdapx.DefaultUserAgent(mcpsrv.Version)).WithGuard(guard)
 
-	// One cache backs both protocols and the WHOIS host map; Redis slots in
-	// behind the same interface (design §9-§10).
-	backends, err := buildStores(context.Background(), loadStoreConfig(), log)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = backends.close() }()
-	store := backends.cache
+	// One in-process cache backs both protocols and the WHOIS host map, and
+	// sessions live beside it. This is a single-replica server by decision
+	// (design §11.3): nothing is shared between processes, so nothing needs a
+	// network store. The cost is that a restart forgets every session and each
+	// client enrolls again.
+	store := cache.NewMemory()
+	sessions := auth.NewMemoryStore()
 	wc := whois.NewClient(whois.NewTransport(whois.DefaultTimeout).WithGuard(guard), store, log)
 	res := resolve.New(rc, wc, store, log).WithNetRegistry(netReg)
 
@@ -168,9 +169,9 @@ func run(lf *listenFlags) error {
 
 	// Keep the breaker and session gauges current. Cheap, and it is what turns
 	// "something is wrong" into "this registry is down" on a dashboard.
-	go publishGauges(ctx, metrics, guard, backends)
+	go publishGauges(ctx, metrics, guard, sessions)
 
-	stack, err := buildAuth(cfg, acfg, store, backends.sessions, log)
+	stack, err := buildAuth(cfg, acfg, sessions, log)
 	if err != nil {
 		return err
 	}
@@ -224,14 +225,6 @@ func run(lf *listenFlags) error {
 			http.Error(w, "not ready: no authentication configured on a non-loopback listener",
 				http.StatusServiceUnavailable)
 			return
-		}
-		if backends.ready != nil {
-			checkCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-			defer cancel()
-			if err := backends.ready(checkCtx); err != nil {
-				http.Error(w, "not ready: cache backend unreachable", http.StatusServiceUnavailable)
-				return
-			}
 		}
 		w.WriteHeader(http.StatusOK)
 		_, _ = fmt.Fprintln(w, "ready")
@@ -327,7 +320,7 @@ func nowPlusHour() time.Time {
 // Counters and histograms are updated where the work happens; these two are
 // state rather than events, so they need a poller. The interval is short enough
 // that a dashboard shows a registry going down within a scrape or two.
-func publishGauges(ctx context.Context, m *obs.Metrics, guard *ratelimit.Guard, backends *stores) {
+func publishGauges(ctx context.Context, m *obs.Metrics, guard *ratelimit.Guard, sessions *auth.MemoryStore) {
 	t := time.NewTicker(15 * time.Second)
 	defer t.Stop()
 
@@ -349,7 +342,7 @@ func publishGauges(ctx context.Context, m *obs.Metrics, guard *ratelimit.Guard, 
 				m.SetBreakerOpen(host, false)
 			}
 		}
-		if n := backends.activeSessions(ctx, time.Now().UTC()); n >= 0 {
+		if n := activeSessions(ctx, sessions, time.Now().UTC()); n >= 0 {
 			m.SetActiveSessions(n)
 		}
 	}

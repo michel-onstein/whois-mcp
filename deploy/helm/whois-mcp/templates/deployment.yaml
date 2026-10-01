@@ -6,9 +6,17 @@ metadata:
   labels:
     {{- include "whois-mcp.labels" . | nindent 4 }}
 spec:
-  {{- if not .Values.autoscaling.enabled }}
-  replicas: {{ .Values.replicaCount }}
-  {{- end }}
+  # One replica, not a value. Sessions and the cache are in-process, so a second
+  # pod would hold its own sessions and log clients out whenever the Service
+  # routed them to the other one (design §11.3).
+  replicas: 1
+  strategy:
+    # Recreate rather than RollingUpdate: with in-process state a rollout cannot
+    # preserve sessions anyway, and a rolling update would briefly route traffic
+    # to two pods holding different generated signing keys, so tokens minted by
+    # one would be refused by the other for the duration. A few seconds of
+    # downtime is the honest version of the same event.
+    type: Recreate
   selector:
     matchLabels:
       {{- include "whois-mcp.selectorLabels" . | nindent 6 }}
@@ -59,29 +67,15 @@ spec:
                 secretKeyRef:
                   name: {{ include "whois-mcp.secretName" . }}
                   key: {{ .Values.secrets.enrollmentTokenKey }}
-            # Shared across replicas by construction: it comes from one Secret.
-            # A per-replica key would make every replica reject the others'
-            # tokens, which presents as random 401s.
+            # Optional: absent from the Secret, the server generates a key at
+            # start. Sessions die with the pod anyway, so a key that does too
+            # loses nothing extra.
             - name: WHOIS_MCP_SIGNING_KEY
               valueFrom:
                 secretKeyRef:
                   name: {{ include "whois-mcp.secretName" . }}
                   key: {{ .Values.secrets.signingKeyKey }}
-            - name: WHOIS_MCP_CACHE
-              value: {{ .Values.cache | quote }}
-            - name: WHOIS_MCP_SESSION_STORE
-              value: {{ .Values.sessionStore | quote }}
-            {{- if or (eq .Values.cache "redis") (eq .Values.sessionStore "redis") }}
-            - name: WHOIS_MCP_REDIS_URL
-              {{- if .Values.redis.existingSecret }}
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.redis.existingSecret }}
-                  key: {{ .Values.redis.urlKey }}
-              {{- else }}
-              value: {{ .Values.redis.url | quote }}
-              {{- end }}
-            {{- end }}
+                  optional: true
             {{- with .Values.otel.endpoint }}
             - name: WHOIS_MCP_OTEL_ENDPOINT
               value: {{ . | quote }}
@@ -99,9 +93,8 @@ spec:
             timeoutSeconds: 2
             failureThreshold: 3
           readinessProbe:
-            # /readyz is gated on the bootstrap map being loaded and the cache
-            # backend answering, so a replica that cannot serve a refresh or
-            # honour a revocation leaves rotation instead of failing requests.
+            # /readyz is gated on the bootstrap map being loaded, so the pod
+            # takes traffic only once it can resolve a TLD.
             httpGet:
               path: /readyz
               port: http
@@ -134,8 +127,8 @@ spec:
             medium: Memory
             sizeLimit: 16Mi
       {{- end }}
-      # No persistent volumes anywhere: the request path is stateless and
-      # everything durable lives in Redis or is derived from IANA.
+      # No persistent volumes anywhere: nothing here is a source of truth.
+      # Sessions are in memory and die with the pod; the rest derives from IANA.
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -146,9 +139,5 @@ spec:
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
-      {{- with .Values.topologySpreadConstraints }}
-      topologySpreadConstraints:
         {{- toYaml . | nindent 8 }}
       {{- end }}

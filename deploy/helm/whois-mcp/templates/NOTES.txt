@@ -1,9 +1,6 @@
 whois-mcp {{ .Chart.AppVersion }} installed as {{ .Release.Name }}.
 
   Endpoint:  {{ include "whois-mcp.publicURL" . }}/mcp
-  Replicas:  {{ if .Values.autoscaling.enabled }}{{ .Values.autoscaling.minReplicas }}-{{ .Values.autoscaling.maxReplicas }} (HPA){{ else }}{{ .Values.replicaCount }}{{ end }}
-  Cache:     {{ .Values.cache }}
-  Sessions:  {{ .Values.sessionStore }}
 
 ENROLLING A CLIENT
 
@@ -55,21 +52,22 @@ ccTLD that publishes no RDAP service becomes unresolvable, and the symptom looks
 like a parser bug rather than a firewall rule.
 {{- end }}
 
-{{ if and (gt (int (default .Values.replicaCount .Values.autoscaling.minReplicas)) 1) (ne .Values.sessionStore "redis") }}
-WARNING: more than one replica with a non-shared session store. A client that
-enrolls against one replica will be logged out by the next request the load
-balancer sends elsewhere.
-{{- end }}
+RESTARTS
+
+Sessions live in the pod's memory. A restart or an upgrade forgets them all, and
+every client gets a 401 on its next request and enrolls again through the
+browser. That is the accepted cost of running one replica with no external
+store; access tokens are only valid for 10 minutes, so there is no longer window
+to worry about.
 
 {{ if not .Values.secrets.existingSecret }}
-NOTE: the enrollment token and signing key were rendered from your values, so
-they are in this release's stored manifest. For anything beyond a test cluster,
-manage them with sealed-secrets or external-secrets and set
-secrets.existingSecret instead.
+NOTE: the enrollment token was rendered from your values, so it is in this
+release's stored manifest. For anything beyond a test cluster, manage it with
+sealed-secrets or external-secrets and set secrets.existingSecret instead.
 {{- end }}
 
-ROTATING THE SIGNING KEY
+ROTATING THE ENROLLMENT TOKEN
 
-See deploy/helm/whois-mcp/RUNBOOK_KEY_ROTATION.md. The short version: publish the
-new key alongside the old, wait one access-token lifetime (10 minutes), then
-retire the old one. Retiring it early invalidates tokens that are still valid.
+Change it in the Secret and restart the pod. Existing sessions are not affected
+by the token itself, but the restart ends them, so every client re-enrolls with
+the new token — which is what a rotation wants.

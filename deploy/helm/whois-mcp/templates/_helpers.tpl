@@ -135,30 +135,8 @@ deliberately not the ingress.
 {{- end -}}
 {{- end -}}
 
-{{- if not .Values.secrets.existingSecret -}}
-{{- if not .Values.secrets.enrollmentToken -}}
+{{- if and (not .Values.secrets.existingSecret) (not .Values.secrets.enrollmentToken) -}}
 {{- fail "secrets.enrollmentToken is required unless secrets.existingSecret is set" -}}
-{{- end -}}
-{{- if not .Values.secrets.signingKey -}}
-{{- fail "secrets.signingKey is required unless secrets.existingSecret is set. It must be the SAME key on every replica, or replicas reject each other's tokens" -}}
-{{- end -}}
-{{- end -}}
-
-{{- if or (eq .Values.cache "redis") (eq .Values.sessionStore "redis") -}}
-{{- if and (not .Values.redis.url) (not .Values.redis.existingSecret) -}}
-{{- fail "redis.url or redis.existingSecret is required when cache or sessionStore is \"redis\"" -}}
-{{- end -}}
-{{- end -}}
-
-{{/* More than one replica with per-replica state is the silent-failure case. */}}
-{{- $replicas := .Values.replicaCount | int -}}
-{{- if .Values.autoscaling.enabled -}}
-{{- $replicas = .Values.autoscaling.minReplicas | int -}}
-{{- end -}}
-{{- if gt $replicas 1 -}}
-{{- if ne .Values.sessionStore "redis" -}}
-{{- fail (printf "sessionStore is %q with %d replicas: sessions would be per-replica, so a client that enrolls against one replica is logged out by the next request the load balancer routes elsewhere. Set sessionStore=redis or replicaCount=1" .Values.sessionStore $replicas) -}}
-{{- end -}}
 {{- end -}}
 
 {{- if .Values.ingress.enabled -}}

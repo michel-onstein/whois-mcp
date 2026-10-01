@@ -11,7 +11,6 @@ import (
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
 
 	"github.com/qjam/whois-mcp/internal/auth"
-	"github.com/qjam/whois-mcp/internal/cache"
 	"github.com/qjam/whois-mcp/internal/mcpsrv"
 	"github.com/qjam/whois-mcp/internal/web"
 )
@@ -21,9 +20,11 @@ type authConfig struct {
 	// enrollmentToken is the operator's fixed secret. Empty disables auth
 	// entirely, which is only permitted on loopback.
 	enrollmentToken string
-	// signingKey is the Ed25519 seed or PEM. Empty generates an ephemeral key,
-	// which is fine for one process and wrong for more than one — every replica
-	// would mint tokens the others reject.
+	// signingKey is the Ed25519 seed or PEM. Empty generates an ephemeral key.
+	// That is the normal case for this single-replica server: sessions live in
+	// memory and die with the process anyway, so a key that dies with it costs
+	// nothing extra. Set it only if you want tokens to survive a restart that
+	// the sessions behind them will not.
 	signingKey string
 	// publicURL is the canonical https URL clients reach us on. It is the token
 	// issuer and, with /mcp appended, the audience, so it must match what
@@ -60,14 +61,12 @@ type authStack struct {
 // checkExposure, not here: this function's job is to build what it was asked
 // for, and the security gate is a single explicit check rather than a condition
 // scattered across the setup.
-// sessions must be the store chosen by configuration, not one built here.
-// Building a store locally is exactly how the Redis session store ended up
-// implemented, tested, and never connected: WHOIS_MCP_SESSION_STORE=redis
-// created a RedisStore in buildStores that nothing referenced, so every replica
-// kept sessions in its own memory and a client that enrolled against one was
-// rejected by the next. The compose end-to-end run caught it; nothing
-// single-process could have.
-func buildAuth(cfg config, ac authConfig, store cache.Cache, sessions auth.SessionStore, log *slog.Logger) (*authStack, error) {
+//
+// sessions is the one store the process owns, passed in rather than built here
+// so the enrollment path and the session admin tools provably see the same
+// instance. A store built locally once went unreferenced by everything else,
+// and only an end-to-end run noticed.
+func buildAuth(cfg config, ac authConfig, sessions auth.SessionStore, log *slog.Logger) (*authStack, error) {
 	if ac.enrollmentToken == "" {
 		return nil, nil
 	}
@@ -95,7 +94,7 @@ func buildAuth(cfg config, ac authConfig, store cache.Cache, sessions auth.Sessi
 	}
 
 	issuer := auth.NewIssuer(keyring, publicURL, publicURL+auth.PathMCP)
-	denylist := auth.NewDenylist(store)
+	denylist := auth.NewDenylist()
 
 	enrollment, err := auth.NewEnrollment(ac.enrollmentToken, log)
 	if err != nil {
@@ -127,8 +126,8 @@ func buildAuth(cfg config, ac authConfig, store cache.Cache, sessions auth.Sessi
 	bearer := sdkauth.RequireBearerToken(tokenVerifier, &sdkauth.RequireBearerTokenOptions{
 		ResourceMetadataURL: prmURL,
 		Scopes:              auth.MinimumScopes,
-		// A few seconds of tolerance: a replica whose clock trails the one that
-		// minted a token would otherwise reject tokens that are valid.
+		// A few seconds of tolerance for clients whose clocks trail ours. The
+		// minting and verifying process is the same one, so this is for them.
 		ClockSkew: 5 * 1000 * 1000 * 1000, // 5s
 	})
 	gate := auth.ScopeGate(mcpsrv.PrivilegedTools, prmURL)
@@ -148,9 +147,9 @@ func buildKeyring(spec string, log *slog.Logger) (*auth.Keyring, error) {
 		if err != nil {
 			return nil, err
 		}
-		log.Warn("no WHOIS_MCP_SIGNING_KEY set; generated an ephemeral signing key",
+		log.Info("no WHOIS_MCP_SIGNING_KEY set; generated an ephemeral signing key",
 			"kid", kp.ID,
-			"note", "every restart invalidates all tokens, and multiple replicas will reject each other's")
+			"note", "a restart invalidates outstanding access tokens, as it does the sessions behind them")
 		return auth.NewKeyring(kp), nil
 	}
 	kp, err := auth.ParseKey(spec)

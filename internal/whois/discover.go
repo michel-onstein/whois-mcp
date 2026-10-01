@@ -67,9 +67,8 @@ func SeedHost(tld string) string {
 
 // Discoverer resolves a TLD to its authoritative WHOIS host.
 //
-// Answers are cached for HostTTL through the shared Cache, so the Redis
-// implementation arriving at M3 makes the map shared across replicas without
-// any change here.
+// Answers are cached for HostTTL through the shared Cache, so a TLD's host is
+// asked of IANA once per TTL rather than once per lookup.
 type Discoverer struct {
 	tr    *Transport
 	cache cache.Cache

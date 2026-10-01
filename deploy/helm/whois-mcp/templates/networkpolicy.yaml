@@ -58,15 +58,6 @@ spec:
         - protocol: TCP
           port: {{ . }}
         {{- end }}
-    {{- if or (eq .Values.cache "redis") (eq .Values.sessionStore "redis") }}
-    # In-cluster Redis. A managed Redis outside the cluster needs an
-    # extraEgress entry, because the ipBlock above excludes private ranges.
-    - to:
-        - namespaceSelector: {}
-      ports:
-        - protocol: TCP
-          port: 6379
-    {{- end }}
     {{- with .Values.networkPolicy.extraEgress }}
     {{- toYaml . | nindent 4 }}
     {{- end }}

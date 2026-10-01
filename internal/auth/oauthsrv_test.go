@@ -12,8 +12,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/qjam/whois-mcp/internal/cache"
 )
 
 const testSecret = "test-enrollment-token-long-enough-to-be-realistic"
@@ -54,7 +52,7 @@ func newTestOAuth(t *testing.T) *testServer {
 	ring := NewKeyring(kp)
 	issuer := NewIssuer(ring, "https://whois.example", "https://whois.example/mcp")
 	sessions := NewMemoryStore()
-	deny := NewDenylist(cache.NewMemory())
+	deny := NewDenylist()
 	enr, err := NewEnrollment(testSecret, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatalf("NewEnrollment: %v", err)

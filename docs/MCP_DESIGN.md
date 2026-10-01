@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted — all open questions resolved 2026-08-19 |
+| **Status** | Accepted — all open questions resolved 2026-08-19; amended 2026-10-01: single replica, no Redis (§11.3, decision 7) |
 | **Author** | Michel Onstein |
 | **Date** | 2026-08-19 |
 | **Repo** | `github.com/qjam/whois-mcp` |
@@ -72,8 +72,7 @@ statically-linked binary with no runtime, no interpreter, and no dependency tree
 shipped into the image. The production image is `distroless/static:nonroot` at
 roughly 15–25 MB total with an effectively zero-package attack surface — no
 `node_modules`, no `pip` wheels, no libc CVE stream to patch. Cold start is
-milliseconds, which matters for HPA scale-out and for scale-to-zero. Idle
-memory sits in the tens of megabytes, so replica count is cheap.
+milliseconds and idle memory sits in the tens of megabytes.
 
 **The official Go MCP SDK is stable and current.**
 `github.com/modelcontextprotocol/go-sdk` reached v1.0.0 with an explicit
@@ -122,7 +121,6 @@ TypeScript is the sensible second choice if team familiarity dominates.
 | `golang.org/x/crypto` | Argon2id for enrollment-token hashing |
 | `github.com/go-jose/go-jose/v4` | JWT/JWS signing + JWKS |
 | `go.opentelemetry.io/otel`, `prometheus/client_golang` | Tracing, metrics |
-| `github.com/redis/go-redis/v9` | Shared cache + session store (k8s profile only) |
 
 WHOIS port-43 transport and response parsing are written in-house — the
 existing Go options are thin wrappers with weak parsing, and parsing is where
@@ -150,7 +148,7 @@ our value is.
 | ID | Requirement |
 |---|---|
 | N-1 | p95 latency ≤ 1.5 s warm cache-miss; ≤ 50 ms cache hit; hard ceiling 10 s |
-| N-2 | Horizontally scalable — no replica-affine state on the request path |
+| N-2 | One replica, in-process state — no external store to run, and a restart forgets sessions (§11.3) |
 | N-3 | Respect upstream rate limits; never become an abusive client of a registry |
 | N-4 | No secrets, tokens, or contact PII in logs or traces |
 | N-5 | Identical binary and configuration surface across dev, Docker, and k8s |
@@ -201,7 +199,7 @@ internal/rdapx/         RDAP client wrapper, referral logic, SSRF guard
 internal/whois/         port-43 transport, referral chain, parsers
 internal/whois/parsers/ per-registry parse templates + golden fixtures
 internal/normalize/     upstream shapes → canonical DomainReport
-internal/cache/         Cache interface; memory + redis implementations
+internal/cache/         Cache interface; in-process implementation
 internal/ratelimit/     per-upstream token buckets, Retry-After handling
 internal/obs/           logging, metrics, tracing
 deploy/docker/          Dockerfile, compose for local integration
@@ -267,7 +265,7 @@ enroll without custom code.
 ### 5.3 Token design
 
 **Access token** — EdDSA (Ed25519) signed JWT, 10-minute TTL, verified locally
-by any replica with no store lookup:
+with no store lookup:
 
 ```json
 {
@@ -381,9 +379,8 @@ flow.
 
 Transport is **Streamable HTTP** in stateless mode, targeting `2026-07-28`
 **exclusively** — the stateless core is the design target, not a mode we opt into.
-Nothing in the server holds per-connection state, which is what lets any replica
-serve any request. `server/discover` advertises identity, supported protocol
-versions, and capabilities.
+Nothing in the server holds per-connection state. `server/discover` advertises
+identity, supported protocol versions, and capabilities.
 
 The Go SDK still negotiates down to older revisions automatically; that
 backward compatibility is inherited for free and is *not* a design constraint. We
@@ -632,9 +629,9 @@ timeout — yields `registered: "unknown"` with a warning, never `"no"`.
 
 ## 9. Caching, rate limiting, resilience
 
-**Cache** — interface with two implementations: in-process LRU for dev and
-single-replica Docker; Redis for Kubernetes so replicas share warmth and
-upstreams see a single logical client.
+**Cache** — in-process, behind an interface. The server is one replica
+(§11.3), so one process holds all the warmth and upstreams see a single logical
+client without anything having to be shared.
 
 | Entry | TTL | Rationale |
 |---|---|---|
@@ -691,12 +688,9 @@ binding anything but loopback requires an enrollment token.
 | `WHOIS_MCP_PORT` | `8080` | Port only; also `--port`. Overrides the port in `WHOIS_MCP_LISTEN` |
 | `WHOIS_MCP_PUBLIC_URL` | — | Canonical URI; the OAuth `aud` and `resource` value |
 | `WHOIS_MCP_ENROLLMENT_TOKEN` | — | The fixed token (Secret; hashed at startup) |
-| `WHOIS_MCP_SIGNING_KEY` | — | Ed25519 private key (PEM); generated in dev if unset |
+| `WHOIS_MCP_SIGNING_KEY` | — | Ed25519 seed or PEM; optional, generated at start if unset |
 | `WHOIS_MCP_ACCESS_TOKEN_TTL` | `10m` | Access token lifetime |
 | `WHOIS_MCP_REFRESH_TOKEN_TTL` | `720h` | Refresh token lifetime (30 d, sliding per §5.3) |
-| `WHOIS_MCP_CACHE` | `memory` | `memory` \| `redis` |
-| `WHOIS_MCP_REDIS_URL` | — | Redis DSN when `cache=redis` |
-| `WHOIS_MCP_SESSION_STORE` | `memory` | `memory` \| `redis` \| `postgres` |
 | `WHOIS_MCP_RDAP_BOOTSTRAP_URL` | IANA | Override for air-gapped mirrors |
 | `WHOIS_MCP_RDAP_PROXY` | — | Unused: direct egress is available (§11.2) |
 | `WHOIS_MCP_WHOIS_ENABLED` | `true` | Port 43 confirmed reachable; kept as a kill switch |
@@ -735,28 +729,47 @@ query path. The port-43 rule still has to be written into the k8s NetworkPolicy
 explicitly (§11.3): it is easy to miss, and its absence breaks every ccTLD in a
 way that reads like a parser bug rather than a network fault.
 
-A `deploy/docker/compose.yaml` brings up the server plus Redis for integration
-testing of the shared-cache path.
+A `deploy/docker/compose.yaml` brings up the server on its own, for the
+end-to-end OAuth check CI runs against the built image.
 
 ### 11.3 Kubernetes / Helm (phase 3)
 
 Chart at `deploy/helm/whois-mcp`:
 
-- **Deployment**, ≥2 replicas, no persistent volumes — the request path is
-  stateless, so any replica can serve any request. Access tokens are
-  self-contained JWTs, which is what makes this work without sticky sessions.
-- **Secret** for `ENROLLMENT_TOKEN` and the Ed25519 signing key; the signing key
-  **must be shared across replicas**, and JWKS with `kid` supports rotation
-  without invalidating live tokens.
+- **Deployment**, exactly one replica, `Recreate` strategy, no persistent
+  volumes. The replica count is fixed in the template rather than exposed as a
+  value: sessions and the cache are in-process, so a second pod would hold its
+  own sessions and log clients out whenever the Service routed them elsewhere.
+  `Recreate` because a rolling update would briefly serve from two pods with
+  different generated signing keys, each refusing the other's tokens.
+- **Secret** for `ENROLLMENT_TOKEN`; the Ed25519 signing key is optional and
+  generated at start when absent.
 - **Service** + **Ingress** with TLS termination; HTTP is refused outside
   loopback.
-- **HPA** on CPU and in-flight request count.
 - **NetworkPolicy** permitting egress to 443 and **43** — called out explicitly
   because default-deny policies break WHOIS in a way that looks like a parser bug.
-- **PodDisruptionBudget**, plus `/healthz` (liveness) and `/readyz` (readiness,
-  gated on bootstrap map loaded and cache reachable).
-- Optional Redis subchart, or `redisUrl` pointing at managed Redis.
+- `/healthz` (liveness) and `/readyz` (readiness, gated on the bootstrap map
+  being loaded).
 - `ServiceMonitor` for Prometheus when the operator is present.
+
+**Why one replica (decided 2026-10-01).** The original design ran two or more
+replicas behind a shared Redis holding the cache and the sessions, with an HPA,
+a PodDisruptionBudget, topology spread, a shared signing key and a key-rotation
+runbook. Every one of those existed to make several processes behave as one
+server. For a single-tenant service that answers an occasional lookup, none of
+it buys anything: availability is bounded by the one cluster it runs in either
+way, and the load is nowhere near one process's capacity. Removing it took out
+Redis, its client library, the Redis-backed cache and session store, the store
+selection, the second compose replica, the cross-replica end-to-end check and
+the chart machinery above.
+
+The one thing Redis did that was not about replicas was carry sessions across
+restarts. That is now accepted as lost: a restart or upgrade forgets every
+session, each client gets a 401 on its next request and enrolls again in the
+browser. Access tokens live 10 minutes, so there is no longer window to manage,
+and nothing needs rotating or draining around a restart. The alternatives — a
+file-backed store on a PersistentVolumeClaim, or Redis as a sidecar — were
+judged not worth their weight for a re-login that is one browser click.
 
 Nothing in the application changes between profiles — only environment.
 
@@ -789,7 +802,7 @@ straight through to the registry call that was slow.
 | Token theft | 10-minute access tokens, rotating one-time refresh tokens with reuse-detection family revocation, TLS required |
 | Confused deputy | Strict `aud` validation (RFC 8707); reject tokens issued for any other resource; never accept or forward third-party tokens |
 | Prompt injection via upstream data | WHOIS text is attacker-controllable (registrants choose their own org names). Return it as data in `structuredContent`, never as instructions; cap field lengths; strip control characters |
-| PII handling | Contact data is personal data. `whois:raw` is a separate scope and PII is never logged. Caching it for **1 h is accepted policy**, so contact records are *not* excluded from the cache; the cache is the only place it rests, it is memory/Redis-only with a hard TTL, it is never written to disk or logs, and no record outlives its TTL |
+| PII handling | Contact data is personal data. `whois:raw` is a separate scope and PII is never logged. Caching it for **1 h is accepted policy**, so contact records are *not* excluded from the cache; the cache is the only place it rests, it is in memory only with a hard TTL, it is never written to disk or logs, and no record outlives its TTL |
 | Resource exhaustion | Global upstream concurrency cap, per-tool timeouts, request body limits, batch size cap of 50 |
 | Registry blocking | Conservative rate limits, honest `User-Agent` with contact URL, `Retry-After` compliance, circuit breakers |
 
@@ -823,8 +836,8 @@ straight through to the registry call that was slow.
 | **M0** | Skeleton: Go module, MCP server over Streamable HTTP, `domain_lookup` via RDAP for gTLDs only, no auth, in-memory cache |
 | **M1** | WHOIS port-43 fallback, referral following, template + heuristic parsers, normalized `DomainReport`, tri-state availability |
 | **M2** | Auth: enrollment web UI, embedded OAuth 2.1 AS, per-session JWT + rotating refresh, PRM/AS metadata, scopes |
-| **M3** | Docker image, compose with Redis, rate limiting, circuit breakers, metrics and tracing |
-| **M4** | Helm chart, HPA, NetworkPolicy, JWKS key rotation, session admin tools |
+| **M3** | Docker image, compose, rate limiting, circuit breakers, metrics and tracing |
+| **M4** | Helm chart, NetworkPolicy, session admin tools |
 | **M5** | Phase 2 surface: `ip_lookup`/ASN, batch availability tuning, per-TLD quirks expansion |
 
 ---
@@ -841,8 +854,9 @@ branch that would otherwise be re-litigated during implementation.
 | 2 | Session lifetime | **30 days** | Sliding window on the rotating refresh token: active sessions persist, idle ones expire 30 days after last use. Lifetime and inactivity timeout are one rule (§5.3) |
 | 3 | Egress policy | **TCP/43 reachable** | Direct WHOIS fallback stands; full ccTLD coverage; no third-party RDAP proxy in the query path (§11.2) |
 | 4 | Rate-limit posture | **No agreement** | We are an anonymous, unprotected client of every registry. Conservative limits and cache hit rate become operational requirements, not tuning (§9) |
-| 5 | Data retention | **1 h cache is fine** | Contact PII is cached like any other field, memory/Redis only, hard TTL, never to disk or logs (§13) |
+| 5 | Data retention | **1 h cache is fine** | Contact PII is cached like any other field, in memory only, hard TTL, never to disk or logs (§13) |
 | 6 | Client compatibility | **Stateless** | `2026-07-28` is the sole design and test target; older-revision support is inherited from the SDK but unverified and unsupported (§6, §14) |
+| 7 | Replica count | **One** | Decided 2026-10-01. In-process cache and sessions, no Redis, no HPA or PDB; a restart forgets sessions and each client re-enrolls (§11.3) |
 
 ### 16.1 What these decisions leave open
 
