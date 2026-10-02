@@ -1,6 +1,7 @@
 // Package cache defines the result-cache contract and its in-process
-// implementation. A Redis implementation lands at M3; the interface exists now
-// so that swapping it in requires no changes to callers.
+// implementation. The server runs as a single replica (design §11.3), so the
+// in-process store is the only one; the interface remains so callers and tests
+// depend on the contract rather than the map behind it.
 package cache
 
 import (
@@ -26,8 +27,7 @@ type entry struct {
 	expiresAt time.Time
 }
 
-// Memory is an in-process Cache suitable for development and single-replica
-// deployments. Expired entries are evicted lazily on read and by an optional
+// Memory is the in-process Cache. Expired entries are evicted lazily on read and by an optional
 // background sweep, so a key that is written once and never read again does not
 // pin memory forever.
 type Memory struct {

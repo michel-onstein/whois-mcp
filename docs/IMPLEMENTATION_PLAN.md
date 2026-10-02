@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Complete — Phase 0 and M0-M5 all landed (2026-08-19); §7 security gate closed |
+| **Status** | Complete — Phase 0 and M0-M5 all landed (2026-08-19); §7 security gate closed. Superseded in part 2026-10-01: the Redis stores (2.4, 3.3, 3.9), the ≥2-replica chart, HPA and cross-replica checks (4.2, M4 exit criterion) and the key-rotation runbook (4.7) were removed when the design moved to one replica (design §11.3, decision 7). The tasks below are the historical build order, not the current shape |
 | **Date** | 2026-08-19 |
 | **Plans** | [`MCP_DESIGN.md`](MCP_DESIGN.md) (accepted, all open questions resolved) |
 | **Covers** | Milestones M0 → M5 of design §15 |

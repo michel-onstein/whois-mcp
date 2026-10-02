@@ -33,8 +33,8 @@ OAuth 2.1. The fixed enrollment token your operator holds is an *enrollment
 secret*, not a request credential: it is entered once in a browser form and
 exchanged for tokens scoped to a single named session.
 
-- Access tokens are EdDSA JWTs with a 10-minute TTL, verified locally by any
-  replica with no store lookup — which is what keeps replicas interchangeable.
+- Access tokens are EdDSA JWTs with a 10-minute TTL, verified locally with no
+  store lookup.
 - Refresh tokens are opaque, rotating, one-time-use, on a sliding 30-day window.
   Replaying a spent one is treated as theft: the whole family is revoked.
 - Scopes: `whois:read` for lookups, `whois:raw` for the unredacted raw responses,
@@ -47,9 +47,16 @@ exchanged for tokens scoped to a single named session.
 
 ```bash
 export WHOIS_MCP_ENROLLMENT_TOKEN=$(openssl rand -base64 32)
-export WHOIS_MCP_SIGNING_KEY=...        # Ed25519 seed; generated if unset
 export WHOIS_MCP_PUBLIC_URL=https://whois.example   # required off loopback
+export WHOIS_MCP_SIGNING_KEY=...        # optional Ed25519 seed; generated if unset
 ```
+
+**One replica, in-process state.** Sessions and the cache live in the server's
+memory, by decision ([design §11.3](docs/MCP_DESIGN.md)): there is no Redis and
+nothing else to run. The cost is that a restart forgets every session. Each
+client then gets a 401 on its next request and enrolls again through the
+browser form. Access tokens are valid for ten minutes at most, so that is the
+whole window; nothing needs rotating or draining around a restart.
 
 `WHOIS_MCP_PUBLIC_URL` is the token audience, so a wrong value rejects every
 token. `WHOIS_MCP_DEV_STATIC_BEARER=true` lets `curl` present the enrollment
@@ -105,17 +112,18 @@ chart's `appVersion`, so a default `helm install` expects that tag to exist.
 ```bash
 helm install whois-mcp deploy/helm/whois-mcp \
   --set ingress.host=whois.example \
-  --set secrets.existingSecret=whois-mcp-secrets \
-  --set redis.url=redis://redis:6379/0
+  --set secrets.existingSecret=whois-mcp-secrets
 ```
 
-Two replicas, no persistent volumes, `/healthz` and `/readyz` probes, HPA, PDB,
-and a NetworkPolicy. The chart **refuses to render** configurations that would
-deploy cleanly and then misbehave — a cleartext or trailing-slash `publicURL`
-(it is the token audience), several replicas with per-replica sessions, or a
-NetworkPolicy without egress on **port 43**. That last one is worth repeating:
-without port 43 every ccTLD that publishes no RDAP service becomes unresolvable,
-and the symptom reads like a parser bug rather than a firewall rule.
+One replica with a `Recreate` strategy, no persistent volumes, `/healthz` and
+`/readyz` probes, and a NetworkPolicy. The replica count is not a value: a
+second pod would hold its own sessions and log clients out whenever the Service
+routed them to the other one. The chart **refuses to render** configurations
+that would deploy cleanly and then misbehave — a cleartext or trailing-slash
+`publicURL` (it is the token audience), or a NetworkPolicy without egress on
+**port 43**. That last one is worth repeating: without port 43 every ccTLD that
+publishes no RDAP service becomes unresolvable, and the symptom reads like a
+parser bug rather than a firewall rule.
 
 `publicURL` defaults to `https://<ingress.host>`, so the hostname is stated once.
 Set it explicitly only when clients arrive under another name, or when
@@ -124,23 +132,23 @@ from, and the chart says so instead of guessing. An explicit value that
 disagrees with `ingress.host` is refused: the controller matches on `Host`, so
 requests to it would never reach the release.
 
-The signing key comes from a single Secret, so replicas necessarily share it. A
-per-replica key makes each replica reject the others' tokens, which surfaces as
-random 401s. To rotate it, see
-[`RUNBOOK_KEY_ROTATION.md`](deploy/helm/whois-mcp/RUNBOOK_KEY_ROTATION.md) —
-publish, wait one access-token lifetime, then retire.
+The Secret needs only the enrollment token. The signing key is read as optional
+and generated at start when absent; since sessions die with the pod anyway, a
+key that does too loses nothing. To rotate the enrollment token, change the
+Secret and restart the pod: the restart ends every session, so each client
+re-enrolls with the new token, which is what a rotation wants.
 
 ## Running in a container
 
 ```bash
 export WHOIS_MCP_ENROLLMENT_TOKEN=$(openssl rand -base64 32)
-export WHOIS_MCP_SIGNING_KEY=$(openssl rand -base64 32)
 cd deploy/docker && docker compose up
 ```
 
-That brings up two replicas behind one Redis, which is the configuration worth
-testing: it is the only way to see whether a session enrolled against one replica
-works against the other. `scripts/e2e.sh` walks that flow, and CI runs it.
+That brings up the one server on port 8080. `scripts/e2e.sh` walks the OAuth
+flow against it over the wire — discovery, enrollment, code exchange, step-up,
+refresh rotation and replay detection — and CI runs it against the freshly
+built image.
 
 The image is `distroless/static:nonroot` — no shell, no package manager. It can
 afford to be, because the IANA bootstrap snapshot and the enrollment UI are

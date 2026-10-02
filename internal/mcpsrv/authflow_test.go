@@ -54,7 +54,7 @@ func newAuthedStack(t *testing.T) *authedStack {
 	}
 	ring := auth.NewKeyring(kp)
 	sessions := auth.NewMemoryStore()
-	deny := auth.NewDenylist(store)
+	deny := auth.NewDenylist()
 	enr, err := auth.NewEnrollment(flowSecret, quiet)
 	if err != nil {
 		t.Fatalf("NewEnrollment: %v", err)

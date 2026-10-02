@@ -77,10 +77,10 @@ func (s *Session) Active(now time.Time) bool {
 
 // SessionStore holds sessions and their refresh-token families.
 //
-// It is an interface because the memory implementation here is replaced by
-// Redis at M3 (plan task 3.3) so that replicas share state. Everything on the
-// hot request path deliberately avoids it: access tokens verify locally, and
-// only refresh and revocation touch the store.
+// It is an interface so the authorization server depends on the contract
+// rather than on the map behind it. Everything on the hot request path
+// deliberately avoids it: access tokens verify locally, and only refresh and
+// revocation touch the store.
 type SessionStore interface {
 	// Create records a new session. It deliberately does not take a refresh
 	// token: a refresh token is only ever handed to a client by the token
@@ -119,7 +119,10 @@ type refreshRecord struct {
 	replaced string
 }
 
-// MemoryStore is an in-process SessionStore for development and single-replica
+// MemoryStore is the in-process SessionStore. Sessions live exactly as long as
+// the process does: a restart forgets them all, and every client enrolls again.
+// That is the accepted cost of running one replica with no external store
+// (design §11.3). It is the SessionStore for development and the single-replica
 // deployments.
 type MemoryStore struct {
 	mu       sync.Mutex

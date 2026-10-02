@@ -8,13 +8,11 @@ import (
 	"time"
 
 	sdkauth "github.com/modelcontextprotocol/go-sdk/auth"
-
-	"github.com/qjam/whois-mcp/internal/cache"
 )
 
 func TestTokenVerifierAcceptsGoodToken(t *testing.T) {
 	i := testIssuer(t)
-	v := NewVerifier(i, NewDenylist(cache.NewMemory()))
+	v := NewVerifier(i, NewDenylist())
 	tok, _, _ := i.Mint("sess_1", "laptop", []string{ScopeRead, ScopeRaw})
 
 	info, err := v.TokenVerifier()(context.Background(), tok, nil)
@@ -39,7 +37,7 @@ func TestTokenVerifierAcceptsGoodToken(t *testing.T) {
 // challenge off that sentinel; a bare error would surface as a 500.
 func TestTokenVerifierWrapsErrInvalidToken(t *testing.T) {
 	i := testIssuer(t)
-	v := NewVerifier(i, NewDenylist(cache.NewMemory()))
+	v := NewVerifier(i, NewDenylist())
 
 	_, err := v.TokenVerifier()(context.Background(), "not-a-token", nil)
 	if !errors.Is(err, sdkauth.ErrInvalidToken) {
@@ -52,7 +50,7 @@ func TestTokenVerifierWrapsErrInvalidToken(t *testing.T) {
 func TestTokenVerifierHonoursDenylist(t *testing.T) {
 	ctx := context.Background()
 	i := testIssuer(t)
-	deny := NewDenylist(cache.NewMemory())
+	deny := NewDenylist()
 	v := NewVerifier(i, deny)
 	tok, _, _ := i.Mint("sess_1", "", []string{ScopeRead})
 
@@ -71,7 +69,7 @@ func TestTokenVerifierHonoursDenylist(t *testing.T) {
 func TestTokenVerifierDoesNotLeakWhyToTheClient(t *testing.T) {
 	ctx := context.Background()
 	i := testIssuer(t)
-	deny := NewDenylist(cache.NewMemory())
+	deny := NewDenylist()
 	v := NewVerifier(i, deny)
 
 	tok, _, _ := i.Mint("sess_1", "", []string{ScopeRead})
@@ -89,7 +87,7 @@ func TestTokenVerifierDoesNotLeakWhyToTheClient(t *testing.T) {
 
 func TestDenylistExpiresAfterAccessTokenTTL(t *testing.T) {
 	ctx := context.Background()
-	d := NewDenylist(nil) // exercise the in-process path
+	d := NewDenylist()
 	base := time.Now()
 	d.now = func() time.Time { return base }
 
@@ -108,7 +106,7 @@ func TestDenylistExpiresAfterAccessTokenTTL(t *testing.T) {
 
 func TestDenylistIgnoresEmptySID(t *testing.T) {
 	ctx := context.Background()
-	d := NewDenylist(cache.NewMemory())
+	d := NewDenylist()
 	d.Add(ctx, "")
 	if d.Denied(ctx, "") {
 		t.Error("empty sid is denied; that would reject every token with no sid claim for the wrong reason")

@@ -18,7 +18,7 @@ import (
 func gateStack(t *testing.T, scopes ToolScopes) (http.Handler, *Issuer) {
 	t.Helper()
 	i := testIssuer(t)
-	v := NewVerifier(i, NewDenylist(nil))
+	v := NewVerifier(i, NewDenylist())
 	reached := func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		w.WriteHeader(http.StatusOK)

@@ -2,8 +2,8 @@ apiVersion: v2
 name: whois-mcp
 description: |
   MCP server answering domain registration questions over RDAP with a port-43
-  WHOIS fallback. Stateless request path: any replica can serve any request,
-  because access tokens are self-contained JWTs.
+  WHOIS fallback. Runs as one replica with in-process state: no external store,
+  and a restart forgets every session.
 type: application
 
 # version is the chart's own version; appVersion tracks the server.

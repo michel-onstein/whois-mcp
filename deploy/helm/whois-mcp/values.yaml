@@ -19,11 +19,6 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
-# Two replicas by default. The request path is stateless — access tokens are
-# self-contained JWTs and sessions live in Redis — so this is a real
-# availability gain rather than a decoration.
-replicaCount: 2
-
 # ---------------------------------------------------------------- the URL
 # publicURL is the canonical https URI clients reach this server on. It is the
 # OAuth issuer and, with /mcp appended, the token audience.
@@ -54,32 +49,16 @@ secrets:
   # enrollmentToken is the single security boundary in a single-tenant
   # deployment: anyone holding it can mint a session with any scope.
   enrollmentToken: ""
-  # signingKey is a base64 Ed25519 seed (32 bytes), or a PKCS#8 PEM.
-  #
-  # It MUST be identical across replicas. A per-replica key means each replica
-  # rejects the others' tokens, which presents to users as random 401s that
-  # correlate with nothing — one of the least diagnosable failures available.
+  # signingKey is a base64 Ed25519 seed (32 bytes), or a PKCS#8 PEM. Optional:
+  # unset, the server generates one at start. Sessions live in memory and die
+  # with the pod anyway, so a key that dies with it loses nothing extra.
   signingKey: ""
 
   # Key names inside the Secret, so an existing Secret with different keys can
-  # be used without renaming anything.
+  # be used without renaming anything. The signing key is read as optional, so
+  # an existing Secret that holds only the enrollment token is fine.
   enrollmentTokenKey: enrollment-token
   signingKeyKey: signing-key
-
-# ---------------------------------------------------------------- redis
-redis:
-  # url is a redis:// or rediss:// DSN. Required when cache or sessionStore is
-  # "redis", which is the point of running more than one replica: without a
-  # shared store a client that enrolls against one replica cannot refresh
-  # against another.
-  url: ""
-  # existingSecret/urlKey read the DSN from a Secret instead, since a DSN
-  # usually contains a password.
-  existingSecret: ""
-  urlKey: redis-url
-
-cache: redis          # memory | redis
-sessionStore: redis   # memory | redis
 
 # ---------------------------------------------------------------- service
 service:
@@ -126,30 +105,8 @@ networkPolicy:
   # dnsPorts are needed to resolve registry hostnames at all.
   dnsPorts:
     - 53
-  # extraEgress is appended verbatim, for a managed Redis outside the cluster.
+  # extraEgress is appended verbatim, for anything the chart does not model.
   extraEgress: []
-
-# ---------------------------------------------------------------- scaling
-autoscaling:
-  enabled: true
-  minReplicas: 2
-  maxReplicas: 10
-  targetCPUUtilizationPercentage: 70
-  # inFlightRequests scales on concurrent in-flight requests, which is a better
-  # signal than CPU for a server that spends most of its time waiting on
-  # registries. It needs a metrics adapter that exposes the series, so it is off
-  # by default: an HPA referencing a metric nothing provides does not scale, it
-  # just reports an error forever.
-  inFlightRequests:
-    enabled: false
-    metricName: whois_mcp_in_flight_requests
-    targetAverageValue: "20"
-
-podDisruptionBudget:
-  enabled: true
-  # minAvailable of 1 with 2 replicas allows a node drain to proceed while
-  # keeping the service up. maxUnavailable is the alternative; only set one.
-  minAvailable: 1
 
 # ---------------------------------------------------------------- pod shape
 resources:
@@ -166,18 +123,6 @@ podLabels: {}
 nodeSelector: {}
 tolerations: []
 affinity: {}
-
-# topologySpreadConstraints spreads replicas across nodes, so a single node
-# failure cannot take out every replica. ScheduleAnyway rather than
-# DoNotSchedule: on a single-node cluster the strict version would leave the
-# second replica pending forever.
-topologySpreadConstraints:
-  - maxSkew: 1
-    topologyKey: kubernetes.io/hostname
-    whenUnsatisfiable: ScheduleAnyway
-    labelSelector:
-      matchLabels:
-        app.kubernetes.io/name: whois-mcp
 
 podSecurityContext:
   runAsNonRoot: true

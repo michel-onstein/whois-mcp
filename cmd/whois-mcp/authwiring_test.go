@@ -6,21 +6,15 @@ import (
 	"testing"
 
 	"github.com/qjam/whois-mcp/internal/auth"
-	"github.com/qjam/whois-mcp/internal/cache"
 )
 
 // TestBuildAuthUsesTheStoreItWasGiven is a regression test.
 //
 // buildAuth used to construct auth.NewMemoryStore() internally and ignore the
-// configured backend, so WHOIS_MCP_SESSION_STORE=redis built a RedisStore in
-// buildStores that nothing referenced. Every replica kept sessions in its own
-// memory, and a client that enrolled against one replica was rejected by the
-// next request the load balancer routed elsewhere.
-//
-// Nothing single-process could see it: with one replica, a private memory store
-// behaves exactly like a shared one. The compose end-to-end run caught it. This
-// test makes the wiring itself checkable without a two-replica stack — it
-// asserts identity, not behaviour, because identity is the property that broke.
+// store it was handed, so the store the rest of the process held — and reported
+// sessions from — was never the one enrollment wrote to. Only an end-to-end
+// run noticed. This test asserts identity, not behaviour, because identity is
+// the property that broke.
 func TestBuildAuthUsesTheStoreItWasGiven(t *testing.T) {
 	quiet := slog.New(slog.NewTextHandler(io.Discard, nil))
 	want := auth.NewMemoryStore()
@@ -28,7 +22,6 @@ func TestBuildAuthUsesTheStoreItWasGiven(t *testing.T) {
 	stack, err := buildAuth(
 		config{listen: "127.0.0.1:8080"},
 		authConfig{enrollmentToken: "an-enrollment-token-long-enough-to-pass"},
-		cache.NewMemory(),
 		want,
 		quiet,
 	)
@@ -40,7 +33,7 @@ func TestBuildAuthUsesTheStoreItWasGiven(t *testing.T) {
 	}
 	if stack.sessions != auth.SessionStore(want) {
 		t.Error("buildAuth substituted its own session store for the one it was given; " +
-			"with a Redis-backed store configured, sessions would silently be per-replica")
+			"the rest of the process would then never see the sessions enrollment creates")
 	}
 }
 
@@ -51,7 +44,6 @@ func TestBuildAuthRefusesWithoutASessionStore(t *testing.T) {
 	_, err := buildAuth(
 		config{listen: "127.0.0.1:8080"},
 		authConfig{enrollmentToken: "an-enrollment-token-long-enough-to-pass"},
-		cache.NewMemory(),
 		nil,
 		quiet,
 	)
@@ -67,7 +59,6 @@ func TestBuildAuthDisabledWithoutAToken(t *testing.T) {
 	stack, err := buildAuth(
 		config{listen: "127.0.0.1:8080"},
 		authConfig{},
-		cache.NewMemory(),
 		auth.NewMemoryStore(),
 		quiet,
 	)
